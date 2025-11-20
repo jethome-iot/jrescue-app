@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rescue System - JetHub D2</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    <!-- Custom CSS -->
+    <link href="/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <nav class="navbar navbar-dark bg-primary">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">
+                <i class="bi bi-hdd-network"></i>
+                Rescue System - JetHub D2
+            </span>
+            <span class="navbar-text text-white" id="connection-status">
+                <i class="bi bi-circle-fill text-secondary"></i>
+                Checking...
+            </span>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="container-fluid mt-4">
+        <!-- Navigation Tabs -->
+        <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="network-tab" data-bs-toggle="tab" data-bs-target="#network" type="button" role="tab">
+                    <i class="bi bi-wifi"></i> Network
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="flash-tab" data-bs-toggle="tab" data-bs-target="#flash" type="button" role="tab">
+                    <i class="bi bi-hdd"></i> Flash eMMC
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="system-tab" data-bs-toggle="tab" data-bs-target="#system" type="button" role="tab">
+                    <i class="bi bi-info-circle"></i> System
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content" id="mainTabContent">
+
+            <!-- Network Tab -->
+            <div class="tab-pane fade show active" id="network" role="tabpanel">
+                <div class="row">
+                    <!-- Current Status -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <i class="bi bi-info-circle"></i> Network Status
+                            </div>
+                            <div class="card-body" id="network-status">
+                                <div class="text-center text-muted">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- WiFi Connection -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <i class="bi bi-wifi"></i> WiFi Connection
+                            </div>
+                            <div class="card-body">
+                                <button class="btn btn-primary w-100 mb-3" id="scan-wifi-btn" onclick="scanWiFi()">
+                                    <i class="bi bi-search"></i> Scan for Networks
+                                </button>
+
+                                <div id="wifi-networks" class="d-none">
+                                    <div class="mb-3">
+                                        <label for="wifi-ssid" class="form-label">Network</label>
+                                        <select class="form-select" id="wifi-ssid">
+                                            <option value="">Select network...</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="wifi-password" class="form-label">Password</label>
+                                        <div class="input-group">
+                                            <input type="password" class="form-control" id="wifi-password">
+                                            <button class="btn btn-outline-secondary" type="button" id="toggle-password" onclick="togglePasswordVisibility()">
+                                                <i class="bi bi-eye" id="password-icon"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-success w-100" id="connect-wifi-btn" onclick="connectWiFi()">
+                                        <i class="bi bi-plug"></i> Connect
+                                    </button>
+                                    <div id="wifi-connection-status" class="mt-3 d-none">
+                                        <div class="alert alert-info mb-0">
+                                            <div class="d-flex align-items-center">
+                                                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                                <span id="wifi-status-text">Connecting...</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flash Tab -->
+            <div class="tab-pane fade" id="flash" role="tabpanel">
+                <div class="row">
+                    <!-- Image Selection -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <i class="bi bi-cloud-download"></i> Available Images
+                            </div>
+                            <div class="card-body">
+                                <button class="btn btn-primary mb-3" onclick="loadImages()">
+                                    <i class="bi bi-arrow-clockwise"></i> Refresh List
+                                </button>
+
+                                <div id="image-list">
+                                    <div class="text-center text-muted">
+                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        Loading images...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Flash Progress -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <i class="bi bi-speedometer"></i> Progress
+                            </div>
+                            <div class="card-body">
+                                <div id="flash-status">
+                                    <p class="text-muted">No operation in progress</p>
+                                </div>
+
+                                <!-- Download Progress -->
+                                <div id="download-progress" class="d-none">
+                                    <h6>Downloading...</h6>
+                                    <div class="progress mb-2">
+                                        <div id="download-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                                    </div>
+                                    <p class="small text-muted" id="download-status">0%</p>
+                                    <button class="btn btn-sm btn-danger mt-2" onclick="cancelDownload()">
+                                        <i class="bi bi-x-circle"></i> Cancel Download
+                                    </button>
+                                </div>
+
+                                <!-- Flash Progress -->
+                                <div id="flashing-progress" class="d-none">
+                                    <h6>Flashing to eMMC...</h6>
+                                    <div class="progress mb-2">
+                                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" role="progressbar" style="width: 100%"></div>
+                                    </div>
+                                    <p class="small text-muted">Please wait, this may take several minutes...</p>
+                                    <div class="alert alert-warning" role="alert">
+                                        <i class="bi bi-exclamation-triangle"></i>
+                                        <strong>Do not power off the device!</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Downloaded Files -->
+                <div class="row">
+                    <div class="col-12 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                                <span><i class="bi bi-hdd"></i> Downloaded Files</span>
+                                <button class="btn btn-sm btn-light" onclick="loadDownloadedFiles()">
+                                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div id="downloaded-files">
+                                    <div class="text-center text-muted">
+                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        Loading files...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Tab -->
+            <div class="tab-pane fade" id="system" role="tabpanel">
+                <div class="row">
+                    <!-- System Information -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <i class="bi bi-cpu"></i> System Information
+                            </div>
+                            <div class="card-body" id="system-info">
+                                <div class="text-center text-muted">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- System Actions -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <i class="bi bi-gear"></i> System Actions
+                            </div>
+                            <div class="card-body">
+                                <button class="btn btn-danger w-100" onclick="rebootSystem()">
+                                    <i class="bi bi-arrow-clockwise"></i> Reboot System
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container for Notifications -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="notification-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto" id="toast-title">Notification</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="toast-body">
+                Message
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap 5 JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Custom JS -->
+    <script src="/js/app.js"></script>
+</body>
+</html>
+

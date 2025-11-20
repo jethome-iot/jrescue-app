@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+.cache/
+*.txt
+# Rescue system specific
+/tmp/rescue/
+/var/rescue/*.img.xz
+/var/rescue/*.img
+*.img
+*.img.xz
+
+# Build artifacts
+*.o
+*.ko
+*.mod.c
+.tmp_versions/
+modules.order
+Module.symvers
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary downloads (if any)
+downloads/
+temp/
+

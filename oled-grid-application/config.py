@@ -1,0 +1,115 @@
+"""
+Configuration file for OLED Rescue Console Application
+"""
+
+# ==================== OLED DISPLAY SETTINGS ====================
+
+# Framebuffer Settings (OLED managed by kernel driver ssd130x-i2c)
+FRAMEBUFFER_DEVICE = '/dev/fb1'  # Linux framebuffer device for OLED
+OLED_WIDTH = 128
+OLED_HEIGHT = 64
+
+# Legacy I2C settings (not used - OLED managed by kernel driver)
+OLED_I2C_ADDRESS = 0x3C  # Standard SSD1306 address
+OLED_I2C_BUS = 1         # I2C bus number
+
+# ==================== DISPLAY SETTINGS ====================
+
+# Display Settings
+FONT_SMALL = 12   # For menu items (readable)
+FONT_NORMAL = 14  # For titles
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+
+# Fallback font paths (try in order)
+FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"
+]
+
+# Text Settings
+MAX_LINE_LENGTH = 18  # Characters per line at font size 12 (128px / 7px per char)
+TEXT_TRUNCATE = "..."
+
+# ==================== DEVICE SETTINGS ====================
+
+# Device (fixed to D2)
+JETHOME_DEVICE_NAME = "JetHub D2"
+DEVICE = "j200"
+DEVICE_ID = "d2"
+PLATFORM = "j200"
+
+# Hardware devices
+EMMC_DEVICE = "/dev/mmcblk1"
+WIFI_INTERFACE = "wlan0"
+ETHERNET_INTERFACE = "eth0"
+USB_MOUNT_POINT = "/mnt/usb"
+
+# Storage paths (tmpfs = RAM, не изнашивает flash и быстрее)
+TEMP_DIR = "/tmp/rescue"
+
+# JetHome API
+JETHOME_API_ENABLED = True
+JETHOME_API_BASE = "https://fw.jethome.com"
+JETHOME_DEVICE = "d2"
+JETHOME_PLATFORM = "j200"
+
+# Firmware filter
+JETHOME_FIRMWARE_FILTER = [
+    "armbian.nightly.trixie.edge",
+    "armbian.nightly.jammy.edge",
+    "armbian.nightly.noble.edge",
+    "armbian.nightly.bookworm.edge",
+    "jhaos.release"
+]
+
+# Available JetHome devices (only D2 supported)
+JETHOME_DEVICES = {
+    "j200": {
+        "name": "JetHub D2",
+        "device_id": "d2",
+        "platform": "j200",
+        "description": "JetHub D2 (j200 platform)"
+    }
+}
+
+# Current selected device
+CURRENT_JETHOME_DEVICE = "j200"
+
+# Available images (empty by default, populated from API)
+AVAILABLE_IMAGES = []
+
+# Network
+NETWORK_TIMEOUT = 30
+MIN_FREE_SPACE = 1024  # MB
+DEFAULT_SERVER = ""
+
+# Download settings
+DD_BLOCK_SIZE = 4  # MB
+NETWORK_RETRY_COUNT = 3
+RETRY_DELAY = 5  # seconds
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+USB_DETECTION_TIMEOUT = 30  # seconds
+
+# Advanced settings
+DEBUG = False
+SKIP_MOUNT_CHECK = True  # Set to False for production!
+INTERACTIVE_MENU = False  # OLED uses custom menu, not curses
+SILENT_CONSOLE = True  # Disable all console output (logs only to file)
+VERBOSE_LOGS = False  # Disable verbose logging
+
+# ==================== INPUT SETTINGS ====================
+
+# GPIO Buttons (from device tree)
+# Will use evdev to read /dev/input/eventX
+BUTTON_DEBOUNCE_MS = 100
+
+# Test mode (set to True to run without physical buttons)
+TEST_MODE_NO_BUTTONS = False  # Set to True for testing without gpio-keys
+
+# ==================== APPLICATION SETTINGS ====================
+
+# Application name
+APP_NAME = "Rescue D2"
+APP_VERSION = "1.3.0-OLED"
+
