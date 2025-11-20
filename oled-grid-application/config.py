@@ -33,8 +33,8 @@ TEXT_TRUNCATE = "..."
 
 # ==================== DEVICE SETTINGS ====================
 
-# Device (fixed to D2)
-JETHOME_DEVICE_NAME = "JetHub D2"
+# Device configuration
+JETHOME_DEVICE_NAME = "JetHub"
 DEVICE = "j200"
 DEVICE_ID = "d2"
 PLATFORM = "j200"
@@ -63,13 +63,13 @@ JETHOME_FIRMWARE_FILTER = [
     "jhaos.release"
 ]
 
-# Available JetHome devices (only D2 supported)
+# Available JetHome devices
 JETHOME_DEVICES = {
     "j200": {
-        "name": "JetHub D2",
+        "name": "JetHub",
         "device_id": "d2",
         "platform": "j200",
-        "description": "JetHub D2 (j200 platform)"
+        "description": "JetHub (j200 platform)"
     }
 }
 
@@ -110,6 +110,6 @@ TEST_MODE_NO_BUTTONS = False  # Set to True for testing without gpio-keys
 # ==================== APPLICATION SETTINGS ====================
 
 # Application name
-APP_NAME = "Rescue D2"
+APP_NAME = "Rescue"
 APP_VERSION = "1.3.0-OLED"
 

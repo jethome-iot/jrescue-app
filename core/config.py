@@ -13,8 +13,8 @@ DEFAULT_SERVER = ""
 JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
 
-# JetHome device configuration (fixed: only D2 supported)
-JETHOME_DEVICE_NAME = "JetHub D2"
+# JetHome device configuration
+JETHOME_DEVICE_NAME = "JetHub"
 JETHOME_DEVICE = "d2"  # Device identifier for API
 JETHOME_PLATFORM = "j200"  # Platform identifier
 

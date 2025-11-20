@@ -42,7 +42,7 @@ def show_system_info(menu):
         version = version[:13]
 
     # Simple two-line display
-    info_text = f"D2\n{version}"
+    info_text = f"JetHub\n{version}"
 
     # Show info
     result = menu.show_message(t("info_title"), info_text, wait_for_key=True)

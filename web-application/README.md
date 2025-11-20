@@ -1,8 +1,8 @@
 # Rescue Web Application
 
-**Browser-based Interface for JetHub D2 Rescue Operations**
+**Browser-based Interface for JetHub Rescue Operations**
 
-A modern web interface for managing network configuration, downloading firmware, and flashing eMMC on JetHub D2 devices. Built with Python standard library (no external dependencies) and Bootstrap 5.
+A modern web interface for managing network configuration, downloading firmware, and flashing eMMC on JetHub devices. Built with Python standard library (no external dependencies) and Bootstrap 5.
 
 ---
 
@@ -164,7 +164,7 @@ Response:
   "images": [
     {
       "source": "jethome",
-      "name": "JetHome D2 Armbian Bookworm",
+      "name": "JetHome Armbian Bookworm",
       "version": "25.11.0",
       "date": "2025-10-09T15:27:11+00:00",
       "size": 562558628,
@@ -326,7 +326,7 @@ For issues with the web application, check:
 
 ## 📄 License
 
-Part of the Rescue Console Application project for JetHub D2.
+Part of the Rescue Console Application project for JetHub.
 
 ---
 

@@ -35,7 +35,7 @@ def initialize():
         Tuple of (display, input_handler, menu) or None if failed
     """
     try:
-        # Set device to D2 permanently
+        # Set device permanently
         src_config.CURRENT_JETHOME_DEVICE = oled_config.DEVICE
         src_config.JETHOME_DEVICE = oled_config.DEVICE_ID
         src_config.JETHOME_PLATFORM = oled_config.PLATFORM

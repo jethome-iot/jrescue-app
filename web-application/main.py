@@ -2,7 +2,7 @@
 """
 Rescue Web Application - HTTP Server
 
-Browser-based interface for JetHub D2 rescue operations.
+Browser-based interface for JetHub rescue operations.
 Runs on port 8124 using only Python standard library.
 """
 
@@ -319,7 +319,7 @@ def main() -> None:
         print("║              RESCUE WEB APPLICATION                           ║")
         print("║                                                               ║")
         print("║           eMMC Image Flasher - Web Interface                 ║")
-        print("║                  Device: JetHub D2                            ║")
+        print("║                  Device: JetHub                            ║")
         print("║                                                               ║")
         print("╚═══════════════════════════════════════════════════════════════╝")
         print()

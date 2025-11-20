@@ -1,6 +1,6 @@
 # Rescue Console Application
 
-**eMMC Image Flasher for JetHub D2 Rescue Systems**
+**eMMC Image Flasher for JetHub Rescue Systems**
 
 Complete rescue system with two interfaces:
 - **Console Application** - Full-featured terminal interface with interactive menus
@@ -23,7 +23,7 @@ Complete rescue system with two interfaces:
 
 ## 🎯 Overview
 
-This is a professional rescue system application for **JetHub D2 (j200)** devices that allows you to:
+This is a professional rescue system application for **JetHub (j200)** devices that allows you to:
 
 - 🌐 **Configure WiFi/Ethernet** - Connect to networks using wpa_supplicant (busybox-compatible)
 - 📥 **Download firmware** - Fetch latest images from JetHome API or custom HTTP servers
@@ -35,7 +35,7 @@ This is a professional rescue system application for **JetHub D2 (j200)** device
 ### Key Features
 
 - **Dual Interface**: Terminal and OLED display support
-- **JetHome API Integration**: Automatic firmware discovery for D2 device
+- **JetHome API Integration**: Automatic firmware discovery
 - **Smart Decompression**: Stream `.xz` files directly to eMMC (no extra space needed)
 - **Resume Support**: Continue interrupted downloads
 - **Network Management**: Uses wpa_supplicant (busybox/minimal system compatible)
@@ -58,7 +58,7 @@ Full-featured terminal interface with arrow key navigation and color output.
 ║                           Version 1.3.0                               ║
 ║                                                                       ║
 ║              eMMC Image Flasher for Rescue Systems                    ║
-║                     Device: JetHub D2                                 ║
+║                     Device: JetHub                                 ║
 ║                                                                       ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
@@ -137,7 +137,7 @@ Full-featured terminal interface with arrow key navigation and color output.
 ### Download Progress
 
 ```
-📥 Downloading: armbian-trixie-edge-jethub-d2.img.xz
+📥 Downloading: armbian-trixie-edge-jethub.img.xz
 📍 URL: https://fw.jethome.com/media/firmwares/...
 📦 Total size: 536 MB
 
@@ -152,7 +152,7 @@ Downloaded: 245 MB (45%) | ETA: 00:03:42 | Speed: 2.3 MB/s
 ⚠️  WARNING: This will ERASE ALL DATA on /dev/mmcblk1!
 
 Target device: /dev/mmcblk1 (14.6 GB eMMC)
-Image: armbian-trixie-edge-jethub-d2.img.xz (536 MB compressed)
+Image: armbian-trixie-edge-jethub.img.xz (536 MB compressed)
 
 Type 'yes' to continue: yes
 
@@ -209,7 +209,7 @@ Compact interface designed for 128x64 OLED displays with hardware button navigat
 
 ```
 ┌─────────────────────────────────┐
-│  JetHub D2 Rescue      [EN] 🔋  │ ← Header
+│  JetHub Rescue      [EN] 🔋  │ ← Header
 ├────────────────┬────────────────┤
 │                │                │
 │     Network    │    Flash to    │
@@ -374,7 +374,7 @@ Navigate with LEFT/RIGHT buttons, ENTER to select.
 │ System Info                     │
 ├─────────────────────────────────┤
 │                                 │
-│ Device: JetHub D2               │
+│ Device: JetHub               │
 │ Platform: j200                  │
 │ Network: Connected              │
 │ IP: 192.168.1.100               │
@@ -480,8 +480,8 @@ CONFIG_INPUT_GPIO_KEYS=y
 JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
 
-# JetHome device configuration (fixed: only D2 supported)
-JETHOME_DEVICE_NAME = "JetHub D2"
+# JetHome device configuration
+JETHOME_DEVICE_NAME = "JetHub"
 JETHOME_DEVICE = "d2"        # Device identifier for API
 JETHOME_PLATFORM = "j200"    # Platform identifier
 
@@ -558,8 +558,8 @@ TEXT_TRUNCATE = "..."
 
 # ==================== DEVICE SETTINGS ====================
 
-# Device (fixed to D2)
-JETHOME_DEVICE_NAME = "JetHub D2"
+# Device configuration
+JETHOME_DEVICE_NAME = "JetHub"
 DEVICE = "j200"
 DEVICE_ID = "d2"
 PLATFORM = "j200"
@@ -604,7 +604,7 @@ DEFAULT_LANGUAGE = 'ENG'
 
 ### For Console Application
 
-- **Platform**: JetHub D2 (j200) or any ARM/x86_64 Linux system
+- **Platform**: JetHub (j200) or any ARM/x86_64 Linux system
 - **Python**: 3.6+
 - **RAM**: 1GB+ (for image downloads)
 - **Storage**: Enough space in `/tmp` for compressed images (~600MB)
@@ -628,7 +628,7 @@ DEFAULT_LANGUAGE = 'ENG'
 **Connection Example:**
 
 ```
-JetHub D2          OLED Display (SH1106)
+JetHub          OLED Display (SH1106)
 ---------          ---------------------
 I2C1_SDA  ------>  SDA (Pin 3)
 I2C1_SCL  ------>  SCL (Pin 5)
@@ -698,7 +698,7 @@ $ sudo ./console-application/main.py
 #   Memory:        2.0 GB
 #   Free Space:    800 MB
 #
-#   Device:        JetHub D2
+#   Device:        JetHub
 #   Platform:      j200
 #
 #   eMMC Device:   /dev/mmcblk1
@@ -944,7 +944,7 @@ This project is designed for JetHome rescue systems.
 
 For issues and questions:
 - JetHome Firmware: https://fw.jethome.com/
-- JetHub D2 Info: https://jethome.ru/devices/
+- JetHub Info: https://jethome.ru/devices/
 
 ## 📝 Version
 
@@ -953,7 +953,7 @@ For issues and questions:
 ### Changelog
 
 **v1.3.0**
-- Fixed to JetHub D2 (j200) only
+- Fixed to JetHub (j200) only
 - Simplified main menu (removed device selection and exit)
 - Updated JetHome API integration
 - Improved OLED grid navigation
@@ -1009,5 +1009,5 @@ rescue-consoleview/
 
 ---
 
-**Made for JetHub D2 Rescue Systems** 🚀
+**Made for JetHub Rescue Systems** 🚀
 
