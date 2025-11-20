@@ -10,7 +10,11 @@ let currentDownloadPath = null;
 // ==================== UTILITY FUNCTIONS ====================
 
 /**
- * Make API call
+ * Make API call to backend
+ * @param {string} endpoint - API endpoint path (e.g., '/network/status')
+ * @param {string} method - HTTP method (GET, POST, DELETE, etc.)
+ * @param {object|null} data - Request body data (null for GET requests)
+ * @returns {Promise<object>} Response data from API
  */
 async function apiCall(endpoint, method = 'GET', data = null) {
     try {
@@ -33,7 +37,10 @@ async function apiCall(endpoint, method = 'GET', data = null) {
 }
 
 /**
- * Show toast notification
+ * Show toast notification using Bootstrap
+ * @param {string} title - Notification title
+ * @param {string} message - Notification message
+ * @param {string} type - Notification type ('info', 'success', 'error', 'warning')
  */
 function showNotification(title, message, type = 'info') {
     const toastEl = document.getElementById('notification-toast');
@@ -56,7 +63,9 @@ function showNotification(title, message, type = 'info') {
 }
 
 /**
- * Format bytes to human readable
+ * Format bytes to human readable string
+ * @param {number} bytes - Size in bytes
+ * @returns {string} Formatted string (e.g., '1.5 MB')
  */
 function formatBytes(bytes) {
     if (bytes === 0) return '0 B';
@@ -67,7 +76,9 @@ function formatBytes(bytes) {
 }
 
 /**
- * Format date string
+ * Format date string to locale format
+ * @param {string} dateStr - ISO date string or 'N/A'
+ * @returns {string} Formatted date string or 'N/A'
  */
 function formatDate(dateStr) {
     if (!dateStr || dateStr === 'N/A') return 'N/A';
@@ -76,7 +87,9 @@ function formatDate(dateStr) {
 }
 
 /**
- * Escape HTML to prevent XSS
+ * Escape HTML to prevent XSS attacks
+ * @param {string} text - Text to escape
+ * @returns {string} Escaped HTML string
  */
 function escapeHtml(text) {
     const div = document.createElement('div');

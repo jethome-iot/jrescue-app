@@ -1,0 +1,353 @@
+---
+tags: [style, conventions, python, javascript, formatting]
+globs: ["**/*.py", "**/*.js"]
+---
+
+# Code Style and Formatting Guidelines
+
+## General Principles
+
+- **Readability first** - Code should be easy to understand
+- **Consistency** - Follow existing patterns in the codebase
+- **Documentation** - Include docstrings for modules and functions
+- **Simplicity** - Prefer simple solutions over complex ones
+
+## Python Style
+
+### Naming Conventions
+
+#### Variables and Functions
+- Use `snake_case` for all variable and function names
+- Use descriptive names that indicate purpose
+- Avoid abbreviations unless widely understood
+
+```python
+# Good
+def get_network_status():
+    wifi_interface = "wlan0"
+    connection_timeout = 10
+
+# Bad
+def getNetStat():
+    wifi_if = "wlan0"
+    timeout = 10
+```
+
+#### Constants
+- Use `UPPER_SNAKE_CASE` for module-level constants
+- Group related constants together
+- Document constants with comments
+
+```python
+# Network settings
+WIFI_INTERFACE = "wlan0"
+ETHERNET_INTERFACE = "eth0"
+NETWORK_TIMEOUT = 10
+
+# Storage settings
+EMMC_DEVICE = "/dev/mmcblk1"
+TEMP_DIR = "/tmp/rescue"
+MIN_FREE_SPACE = 600 * 1024 * 1024
+```
+
+#### Classes
+- Use `PascalCase` for class names
+- Use descriptive names ending with handler/manager when appropriate
+
+```python
+class NetworkHandler:
+    """Handle network operations"""
+    pass
+
+class FlashHandler:
+    """Handle eMMC flashing"""
+    pass
+```
+
+### Code Organization
+
+#### Imports
+- Group imports: standard library, third-party, local
+- Use absolute imports
+- One import per line for clarity
+
+```python
+# Standard library
+import os
+import sys
+import subprocess
+import time
+
+# Third-party (if any)
+# None in this project
+
+# Local imports
+import config
+from utils import print_error, print_success
+from network import NetworkHandler
+```
+
+#### Function Structure
+- Keep functions focused on a single task
+- Use helper functions to break down complex operations
+- Document parameters and return values
+
+```python
+def connect_wifi(self, ssid: str, password: str = None) -> bool:
+    """Connect to WiFi network
+
+    Args:
+        ssid: Network SSID name
+        password: Network password (optional for open networks)
+
+    Returns:
+        True if connection successful, False otherwise
+
+    Raises:
+        NetworkError: If connection fails
+    """
+    # Implementation
+    pass
+```
+
+#### Module Structure
+1. Module docstring
+2. Imports
+3. Constants
+4. Classes
+5. Functions
+6. Main execution (if applicable)
+
+### Docstrings
+
+#### Module Docstrings
+Every module should start with a docstring:
+
+```python
+"""
+Network management module using wpa_supplicant (for busybox/minimal systems)
+
+This module provides WiFi and Ethernet connectivity management for rescue systems.
+Uses wpa_supplicant for WiFi configuration, compatible with minimal Linux systems.
+"""
+```
+
+#### Function Docstrings
+Include purpose, parameters, return values, and exceptions:
+
+```python
+def scan_wifi(self) -> List[dict]:
+    """Scan for available WiFi networks
+
+    Returns:
+        List of dictionaries with keys:
+        - ssid: Network name
+        - signal: Signal strength (0-100)
+        - security: Security type (WPA2, WPA, Open)
+        - encrypted: Boolean indicating if password required
+
+    Raises:
+        NetworkError: If scan fails
+    """
+```
+
+### Comments
+
+#### When to Comment
+- Explain **why**, not **what** (code should be self-explanatory)
+- Document complex algorithms or business logic
+- Note workarounds or temporary solutions
+- Explain non-obvious behavior
+
+```python
+# Good: Explains why
+# Skip mount check when running from eMMC (DANGEROUS - only for testing)
+if config.SKIP_MOUNT_CHECK:
+    # Allow flashing even if mounted (will corrupt running system)
+    pass
+
+# Bad: States the obvious
+# Check if device exists
+if os.path.exists(device):
+    pass
+```
+
+#### Comment Style
+- Use `#` for inline comments
+- Use docstrings for function/module documentation
+- Keep comments up-to-date with code
+
+### Formatting
+
+#### Line Length
+- Aim for 80-100 characters per line
+- Break long lines at logical points
+- Use parentheses for line continuation
+
+```python
+# Good
+result = network_handler.connect_wifi(
+    ssid="MyNetwork",
+    password="secret123"
+)
+
+# Also acceptable for short lines
+result = network_handler.connect_wifi("MyNetwork", "secret123")
+```
+
+#### Spacing
+- Use blank lines to separate logical sections
+- Group related code together
+- Use consistent indentation (4 spaces)
+
+## JavaScript Style
+
+### Naming Conventions
+
+#### Variables and Functions
+- Use `camelCase` for variables and functions
+- Use descriptive names
+
+```javascript
+// Good
+let progressInterval = null;
+async function updateProgressBar() {
+}
+
+// Bad
+let pi = null;
+function upd() {
+}
+```
+
+#### Constants
+- Use `UPPER_SNAKE_CASE` for constants
+
+```javascript
+const API_BASE_URL = '/api';
+const POLL_INTERVAL = 500;
+const MAX_RETRIES = 3;
+```
+
+### Code Organization
+
+#### Variable Declarations
+- Use `const` by default
+- Use `let` only when reassignment needed
+- Declare variables at top of scope
+
+```javascript
+// Good
+const endpoint = '/api/flash/progress';
+let progressInterval = null;
+
+// Bad
+var endpoint = '/api/flash/progress';
+```
+
+#### Function Structure
+- Use arrow functions for callbacks
+- Use async/await for asynchronous code
+- Keep functions small and focused
+
+```javascript
+// Good
+async function fetchProgress() {
+    try {
+        const response = await apiCall('/flash/progress');
+        updateUI(response);
+    } catch (error) {
+        handleError(error);
+    }
+}
+
+// Bad
+function fetchProgress() {
+    apiCall('/flash/progress').then(function(response) {
+        updateUI(response);
+    }).catch(function(error) {
+        handleError(error);
+    });
+}
+```
+
+### Comments
+
+#### JavaScript Comments
+- Use `//` for single-line comments
+- Use `/* */` for multi-line comments
+- Use JSDoc-style for function documentation
+
+```javascript
+/**
+ * Make API call to endpoint
+ * @param {string} endpoint - API endpoint path
+ * @param {string} method - HTTP method (GET, POST, etc.)
+ * @param {object} data - Request body data
+ * @returns {Promise<object>} Response data
+ */
+async function apiCall(endpoint, method = 'GET', data = null) {
+    // Implementation
+}
+```
+
+## Error Messages
+
+### User-Facing Messages
+- Use clear, actionable language
+- Avoid technical jargon when possible
+- Provide next steps when applicable
+
+```python
+# Good
+print_error("eMMC device not found: /dev/mmcblk1")
+print_info("Please check config.EMMC_DEVICE setting")
+print_info("Run 'lsblk' to see available devices")
+
+# Bad
+print_error("Device error")
+```
+
+### Logging
+- Use appropriate log levels (error, warning, info)
+- Include context in log messages
+- Respect `VERBOSE_LOGS` setting
+
+```python
+if config.VERBOSE_LOGS:
+    print_info(f"Connecting to WiFi network: {ssid}")
+```
+
+## File Headers
+
+### Python Files
+Include shebang and module docstring:
+
+```python
+#!/usr/bin/env python3
+"""
+Rescue Console Application - Network Module
+
+Handles WiFi and Ethernet connectivity for rescue systems.
+"""
+```
+
+### JavaScript Files
+Include file header comment:
+
+```javascript
+/**
+ * Rescue Web Application - Frontend JavaScript
+ * Handles all API calls and UI interactions
+ */
+```
+
+## Consistency Checks
+
+Before committing code:
+- [ ] Follows naming conventions
+- [ ] Includes docstrings for modules/functions
+- [ ] Uses consistent formatting
+- [ ] Has appropriate comments
+- [ ] Error messages are user-friendly
+- [ ] Code is readable and maintainable

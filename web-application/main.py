@@ -6,18 +6,20 @@ Browser-based interface for JetHub D2 rescue operations.
 Runs on port 8124 using only Python standard library.
 """
 
+# Standard library imports
 import http.server
-import socketserver
 import json
+import mimetypes
 import os
+import socketserver
 import sys
 import urllib.parse
-import mimetypes
 from pathlib import Path
 
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Local imports
 import config
 from api_handler import APIHandler
 
@@ -33,20 +35,36 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
         if getattr(config, 'VERBOSE_LOGS', True):
             super().log_message(format, *args)
 
-    def send_json_response(self, data, status=200):
-        """Send JSON response"""
+    def send_json_response(self, data: dict, status: int = 200) -> None:
+        """Send JSON response
+
+        Args:
+            data: Dictionary to send as JSON
+            status: HTTP status code (default: 200)
+        """
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
 
-    def send_error_response(self, message, status=400):
-        """Send error response"""
+    def send_error_response(self, message: str, status: int = 400) -> None:
+        """Send error response
+
+        Args:
+            message: Error message to send
+            status: HTTP status code (default: 400)
+        """
         self.send_json_response({'success': False, 'error': message}, status)
 
-    def serve_static_file(self, path):
-        """Serve static files"""
+    def serve_static_file(self, path: str) -> None:
+        """Serve static files from static/ directory
+
+        Args:
+            path: Request path (will be resolved relative to static/)
+
+        Security: Prevents directory traversal attacks
+        """
         # Default to index.html
         if path == '/' or path == '':
             path = '/index.html'
@@ -87,7 +105,7 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, f'Error reading file: {e}')
 
-    def do_OPTIONS(self):
+    def do_OPTIONS(self) -> None:
         """Handle OPTIONS requests (CORS preflight)"""
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -95,8 +113,11 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
-    def do_GET(self):
-        """Handle GET requests"""
+    def do_GET(self) -> None:
+        """Handle GET requests
+
+        Routes to API handler or serves static files
+        """
         parsed_path = urllib.parse.urlparse(self.path)
         path = parsed_path.path
 
@@ -107,8 +128,11 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
             # Static files
             self.serve_static_file(path)
 
-    def do_POST(self):
-        """Handle POST requests"""
+    def do_POST(self) -> None:
+        """Handle POST requests
+
+        Routes to API handler for POST endpoints
+        """
         parsed_path = urllib.parse.urlparse(self.path)
         path = parsed_path.path
 
@@ -117,8 +141,11 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404, 'Not found')
 
-    def do_DELETE(self):
-        """Handle DELETE requests"""
+    def do_DELETE(self) -> None:
+        """Handle DELETE requests
+
+        Routes to API handler for DELETE endpoints
+        """
         parsed_path = urllib.parse.urlparse(self.path)
         path = parsed_path.path
 
@@ -127,8 +154,12 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404, 'Not found')
 
-    def handle_api_get(self, path):
-        """Route GET API requests"""
+    def handle_api_get(self, path: str) -> None:
+        """Route GET API requests to appropriate handler
+
+        Args:
+            path: API endpoint path (e.g., '/api/network/status')
+        """
         try:
             # Network endpoints
             if path == '/api/network/status':
@@ -174,8 +205,12 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
             traceback.print_exc()
             self.send_error_response(str(e), 500)
 
-    def handle_api_post(self, path):
-        """Route POST API requests"""
+    def handle_api_post(self, path: str) -> None:
+        """Route POST API requests to appropriate handler
+
+        Args:
+            path: API endpoint path (e.g., '/api/network/wifi/connect')
+        """
         try:
             # Read request body
             content_length = int(self.headers.get('Content-Length', 0))
@@ -226,8 +261,12 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
             traceback.print_exc()
             self.send_error_response(str(e), 500)
 
-    def handle_api_delete(self, path):
-        """Route DELETE API requests"""
+    def handle_api_delete(self, path: str) -> None:
+        """Route DELETE API requests to appropriate handler
+
+        Args:
+            path: API endpoint path (e.g., '/api/flash/cancel')
+        """
         try:
             # Read request body if present
             content_length = int(self.headers.get('Content-Length', 0))
@@ -253,8 +292,12 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
             self.send_error_response(str(e), 500)
 
 
-def check_root():
-    """Check if running as root"""
+def check_root() -> None:
+    """Check if running as root and warn if not
+
+    Prints warning message if not running as root and VERBOSE_LOGS is enabled.
+    Some operations (network config, flashing) require root privileges.
+    """
     if os.geteuid() != 0 and getattr(config, 'VERBOSE_LOGS', True):
         print("⚠️  WARNING: Not running as root!")
         print("Some operations (network config, flashing) will fail.")
@@ -262,8 +305,12 @@ def check_root():
         print()
 
 
-def main():
-    """Main entry point"""
+def main() -> None:
+    """Main entry point for web application
+
+    Initializes the HTTP server and starts serving requests on the configured
+    host and port. Handles graceful shutdown on KeyboardInterrupt.
+    """
     verbose = getattr(config, 'VERBOSE_LOGS', True)
 
     if verbose:

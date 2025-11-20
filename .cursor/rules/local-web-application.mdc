@@ -1,0 +1,261 @@
+---
+tags: [web, http-server, api, python, javascript, bootstrap]
+globs: ["web-application/**/*.py", "web-application/**/*.js", "web-application/**/*.html"]
+---
+
+# Web Application Development Guidelines
+
+## Architecture
+
+### Backend (Python)
+- **HTTP Server**: `http.server.BaseHTTPRequestHandler`
+- **No frameworks**: Pure Python standard library
+- **Port**: 8124 (configurable in `config.py`)
+- **Host**: 0.0.0.0 (listen on all interfaces)
+
+### Frontend
+- **Framework**: Bootstrap 5 (via CDN)
+- **JavaScript**: Vanilla ES6 (no build tools)
+- **API Communication**: Fetch API with polling
+
+## HTTP Server Pattern
+
+### Request Handler
+Extend `BaseHTTPRequestHandler` and implement routing:
+
+```python
+class RescueWebHandler(http.server.BaseHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        self.api_handler = APIHandler()
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        """Handle GET requests"""
+        path = urllib.parse.urlparse(self.path).path
+
+        if path.startswith('/api/'):
+            self.handle_api_request(path)
+        else:
+            self.serve_static_file(path)
+
+    def do_POST(self):
+        """Handle POST requests"""
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/api/'):
+            self.handle_api_request(path)
+```
+
+### Routing
+- `/api/*` → API endpoints (handled by `APIHandler`)
+- `/static/*` → Static files (HTML, CSS, JS)
+- `/` → Serve `index.html`
+
+### Static File Serving
+```python
+def serve_static_file(self, path):
+    """Serve static files from static/ directory"""
+    if path == '/' or path == '/index.html':
+        path = '/static/index.html'
+
+    file_path = Path(__file__).parent / 'static' / path.lstrip('/static/')
+
+    if file_path.exists() and file_path.is_file():
+        # Set content type and serve file
+        content_type, _ = mimetypes.guess_type(str(file_path))
+        self.send_response(200)
+        self.send_header('Content-Type', content_type or 'text/plain')
+        self.end_headers()
+        with open(file_path, 'rb') as f:
+            self.wfile.write(f.read())
+```
+
+## REST API Design
+
+### API Handler Pattern
+Create a separate `APIHandler` class to organize endpoints:
+
+```python
+class APIHandler:
+    def handle_request(self, method, path, body=None):
+        """Route API requests to appropriate handler"""
+        if path == '/api/network/status':
+            return self.get_network_status()
+        elif path == '/api/flash/images':
+            return self.get_flash_images()
+        # ... more endpoints
+```
+
+### Response Format
+- **Success**: `{"success": true, "data": {...}}`
+- **Error**: `{"success": false, "error": "message"}`
+
+### JSON Responses
+```python
+def send_json_response(self, data, status=200):
+    """Send JSON response"""
+    self.send_response(status)
+    self.send_header('Content-Type', 'application/json')
+    self.send_header('Access-Control-Allow-Origin', '*')
+    self.end_headers()
+    self.wfile.write(json.dumps(data).encode('utf-8'))
+```
+
+## API Endpoints
+
+### Network Endpoints
+- `GET /api/network/status` - Get network status
+- `POST /api/network/wifi/scan` - Scan for WiFi networks
+- `POST /api/network/wifi/connect` - Connect to WiFi
+- `GET /api/network/test` - Test internet connectivity
+
+### Flash Endpoints
+- `GET /api/flash/images` - List available images
+- `POST /api/flash/download` - Start image download
+- `GET /api/flash/progress` - Get download/flash progress
+- `POST /api/flash/start` - Start flashing to eMMC
+- `DELETE /api/flash/cancel` - Cancel operation
+
+### System Endpoints
+- `GET /api/system/info` - Get system information
+- `POST /api/system/reboot` - Reboot system
+
+## Long-Running Operations
+
+### Background Threading
+Use threads for operations that take time:
+
+```python
+import threading
+
+def start_download(self, url, dest_path):
+    """Start download in background thread"""
+    def download_thread():
+        # Long-running download operation
+        download_handler.download(url, dest_path, progress_callback)
+
+    thread = threading.Thread(target=download_thread, daemon=True)
+    thread.start()
+```
+
+### Progress Tracking
+Maintain global state for progress:
+
+```python
+operation_state = {
+    'download': {
+        'active': False,
+        'progress': 0,
+        'total': 0,
+        'speed': 0,
+        'eta': 0,
+        'error': None
+    }
+}
+```
+
+## Frontend Patterns
+
+### API Communication
+Use Fetch API with error handling:
+
+```javascript
+async function apiCall(endpoint, method = 'GET', data = null) {
+    try {
+        const options = {
+            method: method,
+            headers: {}
+        };
+
+        if (data) {
+            options.headers['Content-Type'] = 'application/json';
+            options.body = JSON.stringify(data);
+        }
+
+        const response = await fetch(`/api${endpoint}`, options);
+        return await response.json();
+    } catch (error) {
+        console.error('API call failed:', error);
+        throw error;
+    }
+}
+```
+
+### Progress Polling
+Poll progress endpoint during long operations:
+
+```javascript
+function startProgressTracking() {
+    progressInterval = setInterval(async () => {
+        const result = await apiCall('/flash/progress');
+        updateProgressBar(result.progress);
+    }, 500); // Poll every 500ms
+}
+```
+
+### UI Updates
+- Use Bootstrap classes for styling
+- Update DOM elements with progress data
+- Show/hide loading spinners
+- Display success/error messages
+
+## Error Handling
+
+### Backend
+- Catch exceptions in API handlers
+- Return JSON error responses
+- Log errors for debugging
+
+```python
+try:
+    result = network_handler.connect_wifi(ssid, password)
+    return {'success': True, 'status': result}
+except Exception as e:
+    return {'success': False, 'error': str(e)}
+```
+
+### Frontend
+- Handle API errors gracefully
+- Display user-friendly messages
+- Reset UI state on errors
+
+## Security Considerations
+
+### Current Implementation
+- **No authentication** - Designed for local network use
+- **Root required** - Many operations need root privileges
+- **CORS enabled** - `Access-Control-Allow-Origin: *`
+- **Input validation** - Validate all API inputs
+
+### Best Practices
+- Validate all user inputs
+- Sanitize file paths
+- Check permissions before operations
+- Use HTTPS in production (if exposed)
+
+## Configuration
+
+### Server Settings
+```python
+WEB_SERVER_HOST = "0.0.0.0"  # Listen on all interfaces
+WEB_SERVER_PORT = 8124       # HTTP port
+STATIC_DIR = "static"        # Static files directory
+```
+
+### Logging
+- Respect `config.VERBOSE_LOGS` setting
+- Suppress HTTP access logs when `VERBOSE_LOGS = False`
+- Use `SILENT_CONSOLE = True` for web service
+
+## Testing
+
+### Manual Testing
+- Test all API endpoints with `curl`
+- Verify static file serving
+- Test long-running operations (download/flash)
+- Check error handling
+
+### Browser Testing
+- Test in Chrome/Firefox
+- Check responsive design (mobile/tablet)
+- Verify Bootstrap components work
+- Test API calls from browser console

@@ -1,14 +1,19 @@
 """
 API Handler for Rescue Web Application
-Implements REST API endpoints for network, flash, USB, and system operations
+
+Implements REST API endpoints for network, flash, USB, and system operations.
+Handles all backend logic for the web interface, including long-running
+operations with progress tracking.
 """
 
+# Standard library imports
 import json
 import os
 import sys
 import threading
 import time
 import traceback
+from typing import Dict, Any, Optional
 
 # Add core directory to path
 _core_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core')
@@ -48,8 +53,12 @@ download_handler = None
 flash_handler = None
 usb_handler = None
 
-def init_handlers():
-    """Initialize all handlers"""
+def init_handlers() -> None:
+    """Initialize all handler instances
+
+    Creates singleton instances of network, download, flash, and USB handlers.
+    Called automatically when APIHandler is instantiated.
+    """
     global network_handler, download_handler, flash_handler, usb_handler
     if network_handler is None:
         network_handler = network.get_network_handler()
@@ -58,15 +67,25 @@ def init_handlers():
         usb_handler = usb.USBHandler()
 
 class APIHandler:
-    """REST API request handler"""
+    """REST API request handler
 
-    def __init__(self):
+    Handles all API endpoints for the web application, including network
+    configuration, firmware downloading/flashing, USB operations, and system
+    information. Manages long-running operations with progress tracking.
+    """
+
+    def __init__(self) -> None:
+        """Initialize API handler and core handlers"""
         init_handlers()
 
     # ==================== NETWORK OPERATIONS ====================
 
-    def get_network_status(self):
-        """GET /api/network/status - Get current network status"""
+    def get_network_status(self) -> Dict[str, Any]:
+        """GET /api/network/status - Get current network status
+
+        Returns:
+            Dictionary with 'success', 'interfaces' (list), and 'current' (dict)
+        """
         try:
             interfaces = network_handler.get_all_interfaces()
             current = network_handler.get_connection_status()
@@ -79,8 +98,12 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def post_wifi_scan(self):
-        """POST /api/network/wifi/scan - Scan for WiFi networks"""
+    def post_wifi_scan(self) -> Dict[str, Any]:
+        """POST /api/network/wifi/scan - Scan for WiFi networks
+
+        Returns:
+            Dictionary with 'success' and 'networks' (list of network dicts)
+        """
         try:
             networks = network_handler.scan_wifi()
             return {
@@ -90,8 +113,15 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def post_wifi_connect(self, data):
-        """POST /api/network/wifi/connect - Connect to WiFi"""
+    def post_wifi_connect(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """POST /api/network/wifi/connect - Connect to WiFi network
+
+        Args:
+            data: Dictionary containing 'ssid' and optional 'password'
+
+        Returns:
+            Dictionary with 'success', 'message', and 'status'
+        """
         try:
             ssid = data.get('ssid')
             password = data.get('password', '')
@@ -119,8 +149,12 @@ class APIHandler:
     # Ethernet connects automatically via DHCP when cable is plugged in
     # No manual connection endpoint needed - status shown via get_status()
 
-    def get_network_test(self):
-        """GET /api/network/test - Test connectivity"""
+    def get_network_test(self) -> Dict[str, Any]:
+        """GET /api/network/test - Test internet connectivity
+
+        Returns:
+            Dictionary with 'success', 'connected' (bool), and 'message'
+        """
         try:
             success = network_handler.test_connectivity()
             return {
@@ -133,8 +167,12 @@ class APIHandler:
 
     # ==================== FLASH OPERATIONS ====================
 
-    def get_flash_images(self):
-        """GET /api/flash/images - List available images"""
+    def get_flash_images(self) -> Dict[str, Any]:
+        """GET /api/flash/images - List available images from JetHome API
+
+        Returns:
+            Dictionary with 'success' and 'images' (list of image dicts)
+        """
         try:
             images = []
 
@@ -162,8 +200,18 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def post_flash_download(self, data):
-        """POST /api/flash/download - Start download"""
+    def post_flash_download(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """POST /api/flash/download - Start image download
+
+        Starts download in background thread and returns immediately.
+        Progress can be tracked via get_flash_progress().
+
+        Args:
+            data: Dictionary containing 'url', 'filename', and optional 'size'
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
         global operation_state
 
         try:
@@ -213,8 +261,12 @@ class APIHandler:
             operation_state['download']['active'] = False
             return {'success': False, 'error': str(e)}
 
-    def get_flash_progress(self):
-        """GET /api/flash/progress - Get download/flash progress"""
+    def get_flash_progress(self) -> Dict[str, Any]:
+        """GET /api/flash/progress - Get download/flash progress
+
+        Returns:
+            Dictionary with 'success', 'download' (dict), and 'flash' (dict)
+        """
         global operation_state
 
         try:
@@ -237,8 +289,18 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def post_flash_start(self, data):
-        """POST /api/flash/start - Start flashing"""
+    def post_flash_start(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """POST /api/flash/start - Start flashing image to eMMC
+
+        Starts flash operation in background thread. Progress can be tracked
+        via get_flash_progress().
+
+        Args:
+            data: Dictionary containing 'path' (image file path)
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
         global operation_state
 
         try:
@@ -288,8 +350,12 @@ class APIHandler:
             operation_state['flash']['active'] = False
             return {'success': False, 'error': str(e)}
 
-    def delete_flash_cancel(self):
-        """DELETE /api/flash/cancel - Cancel current operation"""
+    def delete_flash_cancel(self) -> Dict[str, Any]:
+        """DELETE /api/flash/cancel - Cancel download/flash operation
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
         global operation_state
 
         try:
@@ -326,8 +392,12 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def get_flash_files(self):
-        """GET /api/flash/files - Get list of downloaded files"""
+    def get_flash_files(self) -> Dict[str, Any]:
+        """GET /api/flash/files - Get list of downloaded image files
+
+        Returns:
+            Dictionary with 'success' and 'files' (list of file dicts)
+        """
         try:
             files = []
             if not os.path.exists(config.TEMP_DIR):
@@ -364,8 +434,15 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def delete_flash_file(self, data):
-        """DELETE /api/flash/file - Delete a downloaded file"""
+    def delete_flash_file(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """DELETE /api/flash/file - Delete a downloaded image file
+
+        Args:
+            data: Dictionary containing 'path' (file path to delete)
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
         try:
             filepath = data.get('path')
             if not filepath:
@@ -389,8 +466,12 @@ class APIHandler:
 
     # ==================== USB OPERATIONS ====================
 
-    def get_usb_status(self):
-        """GET /api/usb/status - Check USB device status"""
+    def get_usb_status(self) -> Dict[str, Any]:
+        """GET /api/usb/status - Check USB device status
+
+        Returns:
+            Dictionary with 'success', 'connected' (bool), and 'device' (dict or None)
+        """
         try:
             device = usb_handler.detect_usb()
 
@@ -409,8 +490,12 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def post_usb_mount(self):
-        """POST /api/usb/mount - Mount USB drive"""
+    def post_usb_mount(self) -> Dict[str, Any]:
+        """POST /api/usb/mount - Mount USB drive
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
         try:
             success = usb_handler.mount_usb()
 
@@ -425,8 +510,12 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def get_usb_images(self):
-        """GET /api/usb/images - List images on USB"""
+    def get_usb_images(self) -> Dict[str, Any]:
+        """GET /api/usb/images - List image files on USB drive
+
+        Returns:
+            Dictionary with 'success' and 'images' (list of image dicts)
+        """
         try:
             images = usb_handler.scan_images()
 
@@ -455,8 +544,12 @@ class APIHandler:
 
     # ==================== SYSTEM OPERATIONS ====================
 
-    def get_system_info(self):
-        """GET /api/system/info - System information"""
+    def get_system_info(self) -> Dict[str, Any]:
+        """GET /api/system/info - Get system information
+
+        Returns:
+            Dictionary with 'success' and system information (dict)
+        """
         try:
             info = get_system_info()
             free_bytes = check_disk_space(config.TEMP_DIR)
@@ -489,8 +582,15 @@ class APIHandler:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def _format_bytes(self, bytes):
-        """Format bytes to human readable"""
+    def _format_bytes(self, bytes: int) -> str:
+        """Format bytes to human readable string
+
+        Args:
+            bytes: Size in bytes
+
+        Returns:
+            Formatted string (e.g., '1.5 MB')
+        """
         if bytes == 0:
             return '0 B'
         k = 1024
@@ -499,8 +599,14 @@ class APIHandler:
         i = min(len(sizes) - 1, max(0, int(bytes).bit_length() // 10))
         return f"{round(bytes / (k ** i), 2)} {sizes[i]}"
 
-    def post_system_reboot(self):
-        """POST /api/system/reboot - Reboot system"""
+    def post_system_reboot(self) -> Dict[str, Any]:
+        """POST /api/system/reboot - Reboot system
+
+        Schedules reboot in 5 seconds to allow response to be sent.
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
         try:
             import subprocess
 
