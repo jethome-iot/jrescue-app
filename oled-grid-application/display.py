@@ -1,6 +1,6 @@
 """
 OLED Display Manager using Linux Framebuffer
-Works with kernel driver (ssd130x-i2c) managing the display via /dev/fb1
+Works with kernel driver (ssd130x-i2c) managing the display via /dev/fb0
 """
 
 import os
@@ -118,7 +118,7 @@ class DisplayManager:
                 except Exception:
                     continue
         # Fallback to default font
-            return ImageFont.load_default()
+        return ImageFont.load_default()
 
     def _truncate(self, text, max_length):
         """Truncate text to max length (legacy, use _wrap_text instead)"""
