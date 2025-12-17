@@ -15,6 +15,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 from utils import get_system_info
 
 
+def _read_os_release() -> dict:
+    """
+    Read /etc/os-release into a dict.
+    Prefer PRETTY_NAME for display.
+    """
+    data = {}
+    try:
+        with open("/etc/os-release", "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                data[k] = v.strip().strip('"')
+    except Exception:
+        pass
+    return data
+
+
 def show_system_info(menu):
     """
     Display system information - simplified version
@@ -29,20 +48,20 @@ def show_system_info(menu):
     # Get system info
     info = get_system_info()
 
-    # Extract firmware version from kernel or system
-    version = info.get('kernel', 'Unknown')
-    if 'Armbian' in version or 'armbian' in version.lower():
-        # Try to extract just version number
-        parts = version.split()
-        for part in parts:
-            if any(char.isdigit() for char in part):
-                version = part[:13]  # Max 13 chars
-                break
-    else:
-        version = version[:13]
+    # Prefer os-release (patched in post-build) for product name/version
+    osr = _read_os_release()
+    pretty = osr.get("PRETTY_NAME")
+    if not pretty:
+        name = osr.get("NAME", "jrescue")
+        ver = osr.get("VERSION_ID", "")
+        pretty = f"{name} {ver}".strip()
 
-    # Simple two-line display
-    info_text = f"JetHub\n{version}"
+    # Fallback: show kernel version if os-release is missing
+    if not pretty:
+        pretty = info.get("kernel", "Unknown")[:18]
+
+    # Keep it simple and readable on 128x64: 2 lines max
+    info_text = pretty[:18]
 
     # Show info
     result = menu.show_message(t("info_title"), info_text, wait_for_key=True)
