@@ -760,7 +760,7 @@ def flash_image_menu():
             t("back_to_main"),
             t("source_http"),
             t("source_usb"),
-            "Flash from RAM (downloaded images)"
+            "Flash from Downloaded"
         ]
 
         source_choice = show_menu(t("select_image_source"), options)
@@ -782,7 +782,7 @@ def flash_image_menu():
                 return  # Return to main menu after successful flash
 
         elif source_choice == 4:
-            # Flash from RAM
+            # Flash from Downloaded
             result = manage_ram_images()
             if result:
                 return  # Return to main menu after successful flash

@@ -356,7 +356,7 @@ def perform_flash(menu, image_path):
 
 def flash_from_ram(menu):
     """
-    Flash image from RAM (downloaded images)
+    Flash image from Downloaded
 
     Args:
         menu: Menu instance
