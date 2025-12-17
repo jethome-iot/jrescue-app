@@ -25,6 +25,12 @@ ETHERNET_INTERFACE = "eth0"
 # Connection timeout in seconds
 NETWORK_TIMEOUT = 10
 
+# wpa_cli scan tuning (scan is async; scan_results may be empty if read too early)
+# Total worst-case scan time ≈ (WPA_SCAN_RETRIES + 1) * WPA_SCAN_TIMEOUT
+WPA_SCAN_TIMEOUT = 6          # seconds to wait for scan_results to populate
+WPA_SCAN_RETRIES = 3          # extra attempts if scan is BUSY or results are still empty
+WPA_SCAN_POLL_INTERVAL = 0.5  # seconds between scan_results polls
+
 # ==================== STORAGE SETTINGS ====================
 
 # eMMC device path (check with: lsblk)

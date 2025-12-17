@@ -340,6 +340,34 @@ class WpaSupplicantHandler(NetworkHandler):
         if self.available:
             print_info("wpa_supplicant (wpa_cli) detected")
 
+    def _wpa_cli(self, *args: str, check: bool = False) -> Tuple[int, str, str]:
+        """Run wpa_cli for current interface."""
+        return run_command(['wpa_cli', '-i', self.wifi_interface, *args], check=check)
+
+    def _wait_for_scan_results(self, timeout_s: float, poll_interval_s: float) -> str:
+        """
+        Poll wpa_cli scan_results until we get at least one network line (header + data),
+        or until timeout. Returns raw stdout (possibly only header if no networks found).
+        """
+        start = time.monotonic()
+        last_stdout = ""
+
+        # Tiny initial delay helps avoid reading stale results immediately after scan trigger
+        time.sleep(min(0.5, max(0.0, poll_interval_s)))
+
+        while (time.monotonic() - start) < timeout_s:
+            returncode, stdout, _ = self._wpa_cli('scan_results', check=False)
+            if returncode == 0 and stdout:
+                last_stdout = stdout
+                lines = stdout.strip().split('\n')
+                # Header line + at least one BSS line
+                if len(lines) > 1:
+                    return stdout
+
+            time.sleep(max(0.1, poll_interval_s))
+
+        return last_stdout
+
     def _ensure_wpa_supplicant_running(self) -> bool:
         """Ensure wpa_supplicant is running"""
         import os
@@ -378,17 +406,31 @@ class WpaSupplicantHandler(NetworkHandler):
 
         print_info("Scanning for WiFi networks...")
 
-        # Trigger scan
-        run_command(['wpa_cli', '-i', self.wifi_interface, 'scan'], check=False)
-        time.sleep(3)
+        # wpa_cli scan is async; scan_results may be stale/empty if read too early.
+        scan_timeout_s = float(getattr(config, 'WPA_SCAN_TIMEOUT', 6))
+        scan_retries = int(getattr(config, 'WPA_SCAN_RETRIES', 2))
+        poll_interval_s = float(getattr(config, 'WPA_SCAN_POLL_INTERVAL', 0.5))
 
-        # Get results
-        returncode, stdout, _ = run_command(
-            ['wpa_cli', '-i', self.wifi_interface, 'scan_results'],
-            check=False
-        )
+        stdout = ""
+        for attempt in range(scan_retries + 1):
+            ret, scan_out, _ = self._wpa_cli('scan', check=False)
 
-        if returncode != 0:
+            # If wpa_supplicant is busy, wait a bit and retry triggering scan.
+            if ret != 0 or ('FAIL-BUSY' in (scan_out or '')):
+                time.sleep(1)
+                continue
+
+            stdout = self._wait_for_scan_results(timeout_s=scan_timeout_s, poll_interval_s=poll_interval_s) or ""
+            if stdout.strip():
+                lines = stdout.strip().split('\n')
+                if len(lines) > 1:  # got at least one network
+                    break
+
+            # No networks yet (or only header). Small delay then retry scan.
+            if attempt < scan_retries:
+                time.sleep(1)
+
+        if not stdout:
             return []
 
         networks = []
