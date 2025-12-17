@@ -113,230 +113,15 @@ class NetworkHandler:
         return has_connectivity
 
 
-class NetworkManagerHandler(NetworkHandler):
-    """Network management using NetworkManager (nmcli)"""
-
-    def __init__(self, interface: str = None):
-        super().__init__(interface)
-        self.available = check_command_exists('nmcli')
-        if self.available:
-            print_info("NetworkManager (nmcli) detected")
-
-    def scan_wifi(self) -> List[dict]:
-        """Scan for WiFi networks using nmcli"""
-        if not self.available:
-            return []
-
-        print_info("Scanning for WiFi networks...")
-
-        # Rescan
-        run_command(['nmcli', 'device', 'wifi', 'rescan'], check=False)
-        time.sleep(2)
-
-        # Get list
-        returncode, stdout, stderr = run_command(
-            ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
-            check=False
-        )
-
-        if returncode != 0:
-            print_error(f"WiFi scan failed: {stderr}")
-            return []
-
-        networks = []
-        seen_ssids = set()
-
-        for line in stdout.strip().split('\n'):
-            if not line:
-                continue
-
-            parts = line.split(':')
-            if len(parts) >= 3:
-                ssid = parts[0].strip()
-                if ssid and ssid not in seen_ssids:
-                    signal = parts[1].strip()
-                    security = parts[2].strip() if parts[2].strip() else "Open"
-
-                    networks.append({
-                        'ssid': ssid,
-                        'signal': signal,
-                        'security': security
-                    })
-                    seen_ssids.add(ssid)
-
-        return networks
-
-    def connect_wifi(self, ssid: str, password: str = None) -> bool:
-        """Connect to WiFi using nmcli"""
-        if not self.available:
-            return False
-
-        print_info(f"Connecting to '{ssid}'...")
-
-        # Build command
-        if password:
-            cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password]
-        else:
-            cmd = ['nmcli', 'device', 'wifi', 'connect', ssid]
-
-        returncode, stdout, stderr = run_command(cmd, check=False)
-
-        if returncode == 0:
-            print_success(f"Connected to '{ssid}'")
-            print_info(f"WiFi connected to {ssid}")
-
-            # Wait for IP
-            wait_with_spinner(3, "Obtaining IP address")
-            return True
-        else:
-            print_error(f"Failed to connect: {stderr}")
-            print_error(f"WiFi connection failed: {stderr}")
-            return False
-
-    def disconnect_wifi(self) -> bool:
-        """Disconnect from WiFi using nmcli"""
-        if not self.available:
-            return False
-
-        returncode, _, _ = run_command(
-            ['nmcli', 'device', 'disconnect', self.wifi_interface],
-            check=False
-        )
-        return returncode == 0
-
-    def connect_ethernet(self) -> bool:
-        """Connect to Ethernet using nmcli"""
-        if not self.available:
-            return False
-
-        print_info("Configuring Ethernet connection...")
-
-        # Bring up interface
-        returncode, _, stderr = run_command(
-            ['nmcli', 'device', 'connect', self.eth_interface],
-            check=False
-        )
-
-        if returncode == 0:
-            print_success("Ethernet connected")
-            print_info("Ethernet connected")
-            wait_with_spinner(3, "Obtaining IP address")
-            return True
-        else:
-            print_error(f"Failed to connect: {stderr}")
-            return False
-
-    def get_connection_status(self) -> dict:
-        """Get connection status using nmcli"""
-        status = {
-            'connected': False,
-            'interface': None,
-            'ssid': None,
-            'ip': None
-        }
-
-        if not self.available:
-            return status
-
-        # Check WiFi
-        returncode, stdout, _ = run_command(
-            ['nmcli', '-t', '-f', 'DEVICE,STATE,CONNECTION', 'device', 'status'],
-            check=False
-        )
-
-        if returncode == 0:
-            for line in stdout.strip().split('\n'):
-                parts = line.split(':')
-                if len(parts) >= 3:
-                    device = parts[0]
-                    state = parts[1]
-                    connection = parts[2]
-
-                    if state == 'connected':
-                        status['connected'] = True
-                        status['interface'] = device
-
-                        # Get IP
-                        ret, ip_out, _ = run_command(
-                            ['nmcli', '-t', '-f', 'IP4.ADDRESS', 'device', 'show', device],
-                            check=False
-                        )
-                        if ret == 0 and ip_out:
-                            ip_line = ip_out.strip().split('\n')[0]
-                            if ':' in ip_line:
-                                status['ip'] = ip_line.split(':')[1].strip()
-                                # Remove subnet mask if present
-                                if '/' in status['ip']:
-                                    status['ip'] = status['ip'].split('/')[0]
-
-                        # Check if WiFi
-                        if device == self.wifi_interface:
-                            status['ssid'] = connection
-
-                        break
-
-        return status
-
-    def get_all_interfaces(self) -> list:
-        """Get all active network interfaces with their IP addresses"""
-        interfaces = []
-
-        if not self.available:
-            return interfaces
-
-        # Get all devices
-        returncode, stdout, _ = run_command(
-            ['nmcli', '-t', '-f', 'DEVICE,STATE,CONNECTION', 'device', 'status'],
-            check=False
-        )
-
-        if returncode == 0:
-            for line in stdout.strip().split('\n'):
-                parts = line.split(':')
-                if len(parts) >= 3:
-                    device = parts[0]
-                    state = parts[1]
-                    connection = parts[2]
-
-                    if state == 'connected':
-                        # Get IP
-                        ret, ip_out, _ = run_command(
-                            ['nmcli', '-t', '-f', 'IP4.ADDRESS', 'device', 'show', device],
-                            check=False
-                        )
-
-                        ip = None
-                        if ret == 0 and ip_out:
-                            ip_line = ip_out.strip().split('\n')[0]
-                            if ':' in ip_line:
-                                ip = ip_line.split(':')[1].strip()
-                                # Remove subnet mask if present (e.g. "10.181.102.134/24")
-                                if '/' in ip:
-                                    ip = ip.split('/')[0]
-
-                        if ip:
-                            interface_info = {
-                                'interface': device,
-                                'ip': ip,
-                                'ssid': None,
-                                'connected': True  # Has IP = connected
-                            }
-
-                            # Check if WiFi
-                            if device == self.wifi_interface:
-                                interface_info['ssid'] = connection
-
-                            interfaces.append(interface_info)
-
-        return interfaces
-
-
 class WpaSupplicantHandler(NetworkHandler):
     """Network management using wpa_supplicant (wpa_cli)"""
 
     def __init__(self, interface: str = None):
         super().__init__(interface)
         self.available = check_command_exists('wpa_cli')
+        # Cache last successful scan results to smooth out occasional empty scans
+        self._last_scan_stdout: str = ""
+        self._last_scan_ts: float = 0.0
         if self.available:
             print_info("wpa_supplicant (wpa_cli) detected")
 
@@ -369,31 +154,46 @@ class WpaSupplicantHandler(NetworkHandler):
         return last_stdout
 
     def _ensure_wpa_supplicant_running(self) -> bool:
-        """Ensure wpa_supplicant is running"""
+        """
+        Ensure wpa_supplicant is running and controllable via wpa_cli.
+
+        Notes for minimal/busybox systems:
+        - Don't rely on `pgrep` (often disabled in BusyBox).
+        - Prefer a functional check via `wpa_cli ping` (control socket ready).
+        - If we do need to start wpa_supplicant, use the same args as init script.
+        """
         import os
 
-        # Check if already running
-        returncode, stdout, _ = run_command(['pgrep', 'wpa_supplicant'], check=False)
-        if returncode == 0:
+        # 1) Fast-path: control socket responds
+        ret, out, _ = self._wpa_cli('ping', check=False)
+        if ret == 0 and 'PONG' in (out or ''):
             return True
 
-        # Try to start it
-        print_info("Starting wpa_supplicant...")
-        conf_file = f"/etc/wpa_supplicant/wpa_supplicant-{self.wifi_interface}.conf"
+        # 2) BusyBox-friendly process check: if it's running, it might just not be ready yet
+        ret, out, _ = run_command(['pidof', 'wpa_supplicant'], check=False)
+        if ret == 0 and (out or '').strip():
+            time.sleep(0.5)
+            ret2, out2, _ = self._wpa_cli('ping', check=False)
+            return ret2 == 0 and 'PONG' in (out2 or '')
 
-        # Create minimal config if doesn't exist
-        if not os.path.exists(conf_file):
-            os.makedirs(os.path.dirname(conf_file), exist_ok=True)
-            with open(conf_file, 'w') as f:
-                f.write("ctrl_interface=/var/run/wpa_supplicant\n")
-                f.write("update_config=1\n")
+        # 3) Start it (match board init script)
+        print_info("Starting wpa_supplicant...")
+        os.makedirs('/run/wpa_supplicant', exist_ok=True)
 
         returncode, _, _ = run_command([
-            'wpa_supplicant', '-B', '-i', self.wifi_interface,
-            '-c', conf_file
+            'wpa_supplicant', '-B',
+            '-i', self.wifi_interface,
+            '-c', '/etc/wpa_supplicant.conf',
+            '-C', '/run/wpa_supplicant',
         ], check=False)
 
-        return returncode == 0
+        if returncode != 0:
+            return False
+
+        # Give it a moment to create the control socket
+        time.sleep(0.5)
+        ret3, out3, _ = self._wpa_cli('ping', check=False)
+        return ret3 == 0 and 'PONG' in (out3 or '')
 
     def scan_wifi(self) -> List[dict]:
         """Scan for WiFi networks using wpa_cli"""
@@ -407,16 +207,29 @@ class WpaSupplicantHandler(NetworkHandler):
         print_info("Scanning for WiFi networks...")
 
         # wpa_cli scan is async; scan_results may be stale/empty if read too early.
-        scan_timeout_s = float(getattr(config, 'WPA_SCAN_TIMEOUT', 6))
-        scan_retries = int(getattr(config, 'WPA_SCAN_RETRIES', 2))
+        scan_timeout_s = float(getattr(config, 'WPA_SCAN_TIMEOUT', 12))
+        scan_retries = int(getattr(config, 'WPA_SCAN_RETRIES', 3))
         poll_interval_s = float(getattr(config, 'WPA_SCAN_POLL_INTERVAL', 0.5))
+        cache_ttl_s = float(getattr(config, 'WPA_SCAN_CACHE_TTL', 300))
 
         stdout = ""
         for attempt in range(scan_retries + 1):
             ret, scan_out, _ = self._wpa_cli('scan', check=False)
 
-            # If wpa_supplicant is busy, wait a bit and retry triggering scan.
-            if ret != 0 or ('FAIL-BUSY' in (scan_out or '')):
+            # If wpa_supplicant is busy, a scan is already running.
+            # Don't just re-trigger: wait for current scan to finish and fetch results.
+            if 'FAIL-BUSY' in (scan_out or ''):
+                stdout = self._wait_for_scan_results(
+                    timeout_s=min(scan_timeout_s, 6.0),
+                    poll_interval_s=poll_interval_s
+                ) or ""
+                if len(stdout.strip().splitlines()) > 1:
+                    break
+                time.sleep(1)
+                continue
+
+            # Any other error: small delay and retry
+            if ret != 0:
                 time.sleep(1)
                 continue
 
@@ -430,8 +243,18 @@ class WpaSupplicantHandler(NetworkHandler):
             if attempt < scan_retries:
                 time.sleep(1)
 
-        if not stdout:
-            return []
+        # If scan didn't yield anything useful, fall back to last known results
+        # (helps with flaky timing where scan_results occasionally returns only header).
+        if (not stdout) or (len(stdout.strip().splitlines()) <= 1):
+            now = time.monotonic()
+            if self._last_scan_stdout and (now - self._last_scan_ts) < cache_ttl_s:
+                stdout = self._last_scan_stdout
+            else:
+                return []
+        else:
+            # Cache last successful scan output (raw)
+            self._last_scan_stdout = stdout
+            self._last_scan_ts = time.monotonic()
 
         networks = []
         seen_ssids = set()
