@@ -5,7 +5,7 @@ Configuration file for OLED Rescue Console Application
 # ==================== OLED DISPLAY SETTINGS ====================
 
 # Framebuffer Settings (OLED managed by kernel driver ssd130x-i2c)
-FRAMEBUFFER_DEVICE = '/dev/fb1'  # Linux framebuffer device for OLED
+FRAMEBUFFER_DEVICE = '/dev/fb0'  # Linux framebuffer device for OLED
 OLED_WIDTH = 128
 OLED_HEIGHT = 64
 
