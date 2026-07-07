@@ -1,0 +1,54 @@
+name: Release
+
+# Publish a versioned release tarball whenever a vX.Y.Z tag is pushed.
+# The recovery image build (buildroot-recovery-build) fetches this asset by
+# version — see package/jrescue-app/jrescue-app.mk there.
+#
+# To cut a release:
+#   1. bump APP_VERSION in core/config.py
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z   (tag must equal APP_VERSION)
+#   3. bump JRESCUE_APP_VERSION in the buildroot recipe to X.Y.Z
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify tag matches APP_VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          app="$(sed -n 's/^APP_VERSION *= *"\(.*\)"/\1/p' core/config.py)"
+          echo "tag=$tag  core/config.py APP_VERSION=$app"
+          if [ "$tag" != "$app" ]; then
+            echo "::error::Tag v$tag does not match core/config.py APP_VERSION=$app"
+            exit 1
+          fi
+
+      - name: Build release tarball
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          pkg="jrescue-app-$v"
+          mkdir -p "dist/$pkg"
+          # Ship only the runtime components buildroot installs.
+          cp -a core console-application oled-grid-application web-application "dist/$pkg/"
+          find "dist/$pkg" -name '__pycache__' -type d -prune -exec rm -rf {} +
+          tar -C dist -czf "$pkg.tar.gz" "$pkg"
+          sha256sum "$pkg.tar.gz"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            jrescue-app-*.tar.gz
