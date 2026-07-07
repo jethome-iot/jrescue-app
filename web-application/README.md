@@ -21,7 +21,7 @@ A modern web interface for managing network configuration, downloading firmware,
 
 ### Prerequisites
 
-- Python 3.6 or higher
+- Python 3.14 (as shipped in the recovery image; 3.7+ to run elsewhere)
 - Root access (required for network configuration and flashing)
 - Network connection (for downloading firmware)
 
@@ -239,7 +239,7 @@ To change the port, edit `WEB_SERVER_PORT` and restart the server.
 
 **Check:**
 1. Running as root
-2. wpa_supplicant is installed
+2. NetworkManager (nmcli) is available
 3. Network interfaces exist (`ip link show`)
 
 ### Flash Operations Fail
@@ -311,7 +311,6 @@ web-application/
 
 - [Console Application](../console-application/README.md)
 - [OLED Application](../oled-grid-application/README.md)
-- [JetHome API Documentation](../JETHOME_API_RU.md)
 
 ---
 

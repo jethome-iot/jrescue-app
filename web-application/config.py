@@ -43,11 +43,5 @@ VERBOSE_LOGS = False       # Disable verbose logging for web service
 
 # ==================== WEB-SPECIFIC SETTINGS ====================
 
-# Session timeout (for future use)
-SESSION_TIMEOUT = 3600  # 1 hour
-
-# Maximum upload size for USB images
-MAX_UPLOAD_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
-
 # Note: Logs are disabled by default (SILENT_CONSOLE=True, VERBOSE_LOGS=False)
 # If you need logs, enable them in the settings above and set LOG_FILE path

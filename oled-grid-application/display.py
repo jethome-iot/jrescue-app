@@ -5,7 +5,6 @@ Works with kernel driver (ssd130x-i2c) managing the display via /dev/fb0
 
 import os
 import mmap
-import subprocess
 from PIL import Image, ImageDraw, ImageFont
 import config
 
@@ -73,41 +72,6 @@ class DisplayManager:
 
         except Exception as e:
             print(f"Warning: Could not activate framebuffer: {e}")
-
-    def set_brightness_max(self):
-        """
-        Set display brightness to maximum to minimize PWM flicker.
-        This helps reduce flickering when viewed through phone cameras.
-        """
-        brightness_paths = [
-            '/sys/devices/platform/soc/ffd00000.bus/ffd1c000.i2c/i2c-0/0-003c/backlight/0-003c/brightness',
-            '/sys/class/backlight/*/brightness',
-        ]
-
-        import glob
-
-        for pattern in brightness_paths:
-            paths = glob.glob(pattern)
-            for path in paths:
-                try:
-                    # Read max brightness first
-                    max_path = path.replace('/brightness', '/max_brightness')
-                    if os.path.exists(max_path):
-                        with open(max_path, 'r') as f:
-                            max_brightness = int(f.read().strip())
-                    else:
-                        max_brightness = 255  # Default max
-
-                    # Set to maximum
-                    with open(path, 'w') as f:
-                        f.write(str(max_brightness))
-                    print(f"✓ Set brightness to {max_brightness} via {path}")
-                    return True
-                except (IOError, PermissionError, ValueError) as e:
-                    continue
-
-        print("⚠ Could not set brightness (not critical)")
-        return False
 
     def _load_font(self, size):
         """Load font, trying multiple paths"""

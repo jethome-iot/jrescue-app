@@ -2,6 +2,9 @@
 Configuration file for Rescue Console Application
 """
 
+import os
+import re
+
 # ==================== NETWORK SETTINGS ====================
 
 # Default HTTP server for downloading images
@@ -13,33 +16,85 @@ DEFAULT_SERVER = ""
 JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
 
-# JetHome device configuration
-JETHOME_DEVICE_NAME = "JetHub"
-JETHOME_DEVICE = "d2"  # Device identifier for API
-JETHOME_PLATFORM = "j200"  # Platform identifier
+# JetHome device configuration.
+# The board is detected at runtime so the app pulls the right images from the
+# REST API automatically. Resolution order:
+#   1. JETHOME_DEVICE / JETHOME_PLATFORM environment variables (manual override)
+#   2. /proc/device-tree/model, e.g. "JetHome JetHub D1 (J100)" -> d1 / j100
+#   3. fallback default (JetHub D1 / J100)
+# Known boards: platform code -> (REST API device id, human name)
+JETHOME_BOARDS = {
+    "j100": ("d1", "JetHub D1 (J100)"),
+    "j200": ("d2", "JetHub D2 (J200)"),
+    "j310": ("d3", "JetHub D3 (J310)"),
+}
 
-# Network interfaces
+
+def _read_dt_model() -> str:
+    """Return the board model string from the device tree (empty if unavailable)."""
+    try:
+        with open('/proc/device-tree/model', 'rb') as f:
+            # device-tree strings are NUL-terminated
+            return f.read().decode('utf-8', 'replace').replace('\x00', '').strip()
+    except OSError:
+        return ""
+
+
+def detect_board():
+    """Resolve (device_id, platform, name) for the fw.jethome.com REST API."""
+    model = _read_dt_model()
+
+    platform = os.environ.get('JETHOME_PLATFORM')
+    if not platform:
+        m = re.search(r'\(J(\d+)\)', model)      # "(J100)" -> j100
+        if m:
+            platform = "j" + m.group(1)
+
+    device = os.environ.get('JETHOME_DEVICE')
+    if not device:
+        if platform in JETHOME_BOARDS:
+            device = JETHOME_BOARDS[platform][0]
+        else:
+            m = re.search(r'\bD(\d+)\b', model)  # "D1" -> d1
+            if m:
+                device = "d" + m.group(1)
+
+    # Fallbacks for running off-hardware without an override
+    platform = platform or "j100"
+    device = device or JETHOME_BOARDS.get(platform, ("d1",))[0]
+    name = model or JETHOME_BOARDS.get(platform, (None, "JetHub"))[1]
+    return device, platform, name
+
+
+JETHOME_DEVICE, JETHOME_PLATFORM, JETHOME_DEVICE_NAME = detect_board()
+
+# Network interface fallbacks. NetworkManager devices are auto-detected at
+# runtime (see core/network.py); these are only used if detection returns nothing.
 WIFI_INTERFACE = "wlan0"
 ETHERNET_INTERFACE = "eth0"
 
 # Connection timeout in seconds
 NETWORK_TIMEOUT = 10
 
-# wpa_cli scan tuning (scan is async; scan_results may be empty if read too early)
-# Total worst-case scan time ≈ (WPA_SCAN_RETRIES + 1) * WPA_SCAN_TIMEOUT
-WPA_SCAN_TIMEOUT = 6          # seconds to wait for scan_results to populate
-WPA_SCAN_RETRIES = 3          # extra attempts if scan is BUSY or results are still empty
-WPA_SCAN_POLL_INTERVAL = 0.5  # seconds between scan_results polls
-
 # ==================== STORAGE SETTINGS ====================
 
 # eMMC device path (check with: lsblk)
 EMMC_DEVICE = "/dev/mmcblk1"
 
+# Protected region at the start of the eMMC, in MiB.
+# On JetHub eMMC-recovery boards the first RECOVERY_PROTECT_MB hold the
+# bootloader, its environment and both A/B recovery slots. During normal boot
+# u-boot hardware-write-protects this region, but INSIDE recovery it is WRITABLE,
+# so the flasher itself must be the guard: a whole-disk OS image dd'd from
+# sector 0 would otherwise destroy u-boot, its env and both recovery slots.
+# The main-OS image is built with a matching offset (Armbian OFFSET=336), so we
+# skip the image's first RECOVERY_PROTECT_MB and write the rest at the same
+# absolute offset, preserving the boot area, recovery slots and the on-eMMC
+# partition table. Assumes a full-disk source image. Set to 0 to flash a plain
+# full-disk image from sector 0 (non-recovery targets, e.g. a blank SD card).
+RECOVERY_PROTECT_MB = 336
+
 # Temporary directory for downloads
-# Для rescue систем используем /tmp (обычно tmpfs в RAM, очищается при перезагрузке)
-# Образы загружаются в RAM, затем распаковываются потоком через xzcat прямо в eMMC
-# Если система не read-only и есть место на диске, можно изменить на /var/rescue
 TEMP_DIR = "/tmp/rescue"
 
 # USB mount point
@@ -78,12 +133,8 @@ JETHOME_FIRMWARE_FILTER = [
 
 # ==================== APPLICATION SETTINGS ====================
 
-# Application name
-APP_NAME = "Rescue Console Application"
+# Application version
 APP_VERSION = "1.3.0"
-
-# Enable debug logging
-DEBUG = False
 
 # Enable verbose console output (info messages, progress, etc.)
 # Set to False to minimize console output
@@ -102,22 +153,13 @@ INTERACTIVE_MENU = True
 # Block size for dd command (in MB)
 DD_BLOCK_SIZE = 4  # 4MB blocks
 
-# Number of retries for network operations
-NETWORK_RETRY_COUNT = 3
-
-# Delay between retries (seconds)
-RETRY_DELAY = 5
-
 # Chunk size for downloads (bytes)
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
-
-# USB detection timeout (seconds)
-USB_DETECTION_TIMEOUT = 30
 
 # ==================== SAFETY SETTINGS ====================
 
 # Skip mount check (DANGEROUS! Only for testing when running from eMMC)
 # WARNING: Setting this to True allows flashing eMMC while system is running from it
 # This WILL corrupt the running system! Only use for testing purposes!
-SKIP_MOUNT_CHECK = True  # Set to False for production use!
+SKIP_MOUNT_CHECK = False  # Set to True only for testing on a non-recovery host
 

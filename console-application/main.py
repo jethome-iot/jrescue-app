@@ -21,13 +21,12 @@ from translations import t
 from utils import (
     require_root, clear_screen, print_header, print_info, print_success,
     print_error, print_warning, show_menu, show_horizontal_menu, input_dialog, press_enter_to_continue, get_system_info,
-    format_bytes, check_disk_space, ensure_directory, print_info, find_mmcblk_devices,
+    format_bytes, check_disk_space, ensure_directory,
     check_web_app_status, get_local_ip, create_clickable_link
 )
 from network import get_network_handler
-from download import download_image_interactive, DownloadHandler
+from download import download_image_interactive
 from usb import list_usb_devices_interactive, USBHandler
-from flash import flash_image_interactive
 
 
 def show_banner():
@@ -55,8 +54,8 @@ def network_setup_menu():
     network_handler = get_network_handler()
 
     if not network_handler:
-        print_error("wpa_supplicant not available")
-        print_warning("Please install: apt install wpa_supplicant")
+        print_error("NetworkManager not available")
+        print_warning("nmcli was not found — the recovery image must ship NetworkManager")
         press_enter_to_continue()
         return
 
@@ -180,207 +179,6 @@ def wifi_setup(network_handler):
             print_error("Failed to connect to WiFi")
 
         press_enter_to_continue()
-
-
-def ethernet_setup(network_handler):
-    """Ethernet configuration"""
-    clear_screen()
-    print_header("ETHERNET SETUP")
-
-    print_info("Configuring Ethernet with DHCP...")
-    print()
-
-    if network_handler.connect_ethernet():
-        print()
-        print_success("Ethernet connection established!")
-
-        # Test connectivity
-        print()
-        network_handler.test_connectivity()
-    else:
-        print()
-        print_error("Failed to configure Ethernet")
-        print_info("Check cable connection and network settings")
-
-    press_enter_to_continue()
-
-
-def download_image_menu():
-    """Download image via HTTP"""
-    clear_screen()
-    print_header("DOWNLOAD IMAGE VIA HTTP")
-
-    # Check network connectivity
-    print_info("Checking network connection...")
-    network_handler = get_network_handler()
-
-    if network_handler and not network_handler.test_connectivity():
-        print()
-        print_error("No internet connection")
-        print_info("Please configure network first")
-        press_enter_to_continue()
-        return
-
-    print()
-
-    # Check disk space (only warn if insufficient)
-    free_space = check_disk_space(config.TEMP_DIR)
-
-    if free_space < config.MIN_FREE_SPACE:
-        print_warning(f"Low disk space: {format_bytes(free_space)} available")
-        print_error(f"Need at least {format_bytes(config.MIN_FREE_SPACE)} for safe operation")
-        press_enter_to_continue()
-        return
-
-    print()
-
-    # Download
-    result = download_image_interactive()
-
-    print()
-    if result:
-        print_success(f"Image downloaded successfully!")
-        print_info(f"Location: {result}")
-    else:
-        print_info("Download cancelled or failed")
-
-    press_enter_to_continue()
-
-
-def load_image_from_usb_menu():
-    """Load image from USB"""
-    clear_screen()
-    print_header("LOAD IMAGE FROM USB")
-
-    usb_handler = USBHandler()
-
-    # Detect USB devices
-    device = list_usb_devices_interactive()
-
-    if not device:
-        print_info("No USB device selected")
-        press_enter_to_continue()
-        return
-
-    print()
-
-    # Mount device
-    if device['mountpoint']:
-        print_info(f"Device already mounted at {device['mountpoint']}")
-        mount_point = device['mountpoint']
-    else:
-        if not usb_handler.mount_device(device['device']):
-            print_error("Failed to mount USB device")
-            press_enter_to_continue()
-            return
-        mount_point = usb_handler.mount_point
-
-    print()
-
-    # Scan for images
-    images = usb_handler.scan_for_images(mount_point)
-
-    if not images:
-        print_error("No image files found on USB")
-
-        # Unmount if we mounted it
-        if not device['mountpoint']:
-            usb_handler.unmount_device()
-
-        press_enter_to_continue()
-        return
-
-    print()
-    print_info(f"Found {len(images)} image file(s) on USB")
-    print_info("Use ↑↓ arrow keys to navigate, Enter to select")
-    print()
-
-    # Build menu options
-    menu_options = []
-    menu_options.append(t("back_cancel"))
-
-    for image in images:
-        menu_line = f"{image['filename']} | {format_bytes(image['size'])} | {image['relative_path']}"
-        menu_options.append(menu_line)
-
-    choice = show_menu(t("select_image_usb"), menu_options)
-
-    # choice == 0 or 1 means cancelled or "Back" selected
-    if choice == 0 or choice == 1:
-        # Unmount if we mounted it
-        if not device['mountpoint']:
-            usb_handler.unmount_device()
-        press_enter_to_continue()
-        return
-
-    # choice >= 2 means an image was selected
-    image_index = choice - 2
-    if 0 <= image_index < len(images):
-        selected_image = images[image_index]
-
-        print()
-        print_success(f"Selected: {selected_image['filename']}")
-        print_info(f"Path: {selected_image['path']}")
-        print_info(f"Size: {format_bytes(selected_image['size'])}")
-        print_warning("DO NOT REMOVE USB drive until flashing is complete!")
-        print()
-
-        image_to_flash = selected_image['path']
-
-        # Select target device
-        from flash import FlashHandler, select_target_device
-
-        print_info("Select target device for flashing:")
-        print()
-
-        target_device = select_target_device()
-        if not target_device:
-            print_info("No device selected")
-            # Unmount if we mounted it
-            if not device['mountpoint']:
-                usb_handler.unmount_device()
-            press_enter_to_continue()
-            return
-
-        print()
-        print_success(f"Target device: {target_device}")
-
-        # Flash image (from USB or local copy)
-        print()
-        flash_handler = FlashHandler(emmc_device=target_device)
-
-        success = flash_handler.flash_image(image_to_flash)
-
-        # Unmount if we mounted it
-        if not device['mountpoint']:
-            print()
-            usb_handler.unmount_device()
-
-        if success:
-            print()
-            print_info("You can now safely remove USB drive")
-            print()
-
-            # Ask for reboot using interactive horizontal menu
-            reboot_choice = show_horizontal_menu(
-                t("flashing_success"),
-                [t("return_menu"), t("reboot_now")]
-            )
-
-            if reboot_choice == 2:
-                print_info("Rebooting...")
-                time.sleep(1)
-                os.system('reboot')
-                return  # Don't call press_enter_to_continue
-        else:
-            print()
-            print_error("Flashing failed")
-    else:
-        # Unmount if we mounted it
-        if not device['mountpoint']:
-            usb_handler.unmount_device()
-
-    press_enter_to_continue()
 
 
 def flash_from_http():
@@ -740,11 +538,6 @@ def manage_ram_images():
                     press_enter_to_continue()
                     # Return to image list to show updated list
                     continue
-
-
-def flash_from_temp():
-    """Select already downloaded image and flash it - DEPRECATED, use manage_ram_images"""
-    return manage_ram_images()
 
 
 def flash_image_menu():

@@ -25,7 +25,7 @@ Complete rescue system with two interfaces:
 
 This is a professional rescue system application for **JetHub (j200)** devices that allows you to:
 
-- 🌐 **Configure WiFi/Ethernet** - Connect to networks using wpa_supplicant (busybox-compatible)
+- 🌐 **Configure WiFi/Ethernet** - Connect to networks using NetworkManager (nmcli)
 - 📥 **Download firmware** - Fetch latest images from JetHome API or custom HTTP servers
 - 💾 **Flash eMMC** - Write compressed `.img.xz` images directly to eMMC
 - 🔌 **USB support** - Load images from USB drives
@@ -38,7 +38,7 @@ This is a professional rescue system application for **JetHub (j200)** devices t
 - **JetHome API Integration**: Automatic firmware discovery
 - **Smart Decompression**: Stream `.xz` files directly to eMMC (no extra space needed)
 - **Resume Support**: Continue interrupted downloads
-- **Network Management**: Uses wpa_supplicant (busybox/minimal system compatible)
+- **Network Management**: Uses NetworkManager (nmcli)
 - **Zero Dependencies**: Only Python standard library (+ Pillow for OLED)
 
 ---
@@ -183,10 +183,10 @@ sudo ./main.py
 ```
 
 **Requirements:**
-- Python 3.6+
+- Python 3.14 (as shipped in the recovery image; 3.7+ to run elsewhere)
 - Root privileges
 - Terminal with UTF-8 support
-- wpa_cli for WiFi (wpa_supplicant)
+- NetworkManager (nmcli) for networking
 
 ---
 
@@ -402,7 +402,7 @@ sudo ./main.py
 ```
 
 **Requirements:**
-- Python 3.6+
+- Python 3.14 (as shipped in the recovery image; 3.7+ to run elsewhere)
 - Pillow (PIL) for image rendering
 - `/dev/fb1` framebuffer device
 - `/dev/input/event0` for GPIO buttons
@@ -471,7 +471,7 @@ CONFIG_INPUT_GPIO_KEYS=y
 
 ### Console Application Config
 
-**File**: `console-application/config.py`
+**File**: `core/config.py` (shared by the console and web apps)
 
 ```python
 # ==================== NETWORK SETTINGS ====================
@@ -480,12 +480,11 @@ CONFIG_INPUT_GPIO_KEYS=y
 JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
 
-# JetHome device configuration
-JETHOME_DEVICE_NAME = "JetHub"
-JETHOME_DEVICE = "d2"        # Device identifier for API
-JETHOME_PLATFORM = "j200"    # Platform identifier
+# JetHome device — auto-detected at runtime from /proc/device-tree/model
+# (J100 -> d1, J200 -> d2, J310 -> d3). Override with the JETHOME_DEVICE /
+# JETHOME_PLATFORM environment variables if detection is unavailable.
 
-# Network interfaces
+# Network interfaces — auto-detected via NetworkManager; these are fallbacks only
 WIFI_INTERFACE = "wlan0"
 ETHERNET_INTERFACE = "eth0"
 NETWORK_TIMEOUT = 10
@@ -530,7 +529,7 @@ RETRY_DELAY = 5
 # ==================== SAFETY SETTINGS ====================
 
 # Skip mount check (DANGEROUS! Only for testing)
-SKIP_MOUNT_CHECK = True  # Set to False for production!
+SKIP_MOUNT_CHECK = False  # Only True for testing on a non-recovery host
 ```
 
 ### OLED Grid Application Config
@@ -558,11 +557,9 @@ TEXT_TRUNCATE = "..."
 
 # ==================== DEVICE SETTINGS ====================
 
-# Device configuration
-JETHOME_DEVICE_NAME = "JetHub"
-DEVICE = "j200"
-DEVICE_ID = "d2"
-PLATFORM = "j200"
+# Board device id / platform is auto-detected in core config
+# (env override -> /proc/device-tree/model -> fallback); the OLED app no
+# longer overrides it, so the right images are pulled for whatever board it runs on.
 
 # Hardware devices
 EMMC_DEVICE = "/dev/mmcblk1"
@@ -762,16 +759,15 @@ Hardware Buttons Navigation:
 
 ### Console Application Issues
 
-#### Issue: "No network manager available"
+#### Issue: "NetworkManager not available"
 **Solution:**
 ```bash
-# Check if wpa_cli is available
-which wpa_cli
+# Check that nmcli is present (the recovery image must ship NetworkManager)
+which nmcli
+nmcli general status
 
-# If not, install wpa_supplicant
-apt-get install wpa_supplicant
-
-# OR use wpa_supplicant fallback (already supported)
+# List the devices NetworkManager sees
+nmcli device status
 ```
 
 #### Issue: "Cannot connect to server" when using JetHome API
@@ -883,16 +879,14 @@ MAX_LINE_LENGTH = 16  # Adjust character limit
 #### Issue: "Wrong password" even with correct password
 **Solution:**
 ```bash
-# Check wpa_supplicant is running
-ps aux | grep wpa_supplicant
+# List the Wi-Fi device name (may not be wlan0)
+nmcli -t -f DEVICE,TYPE device status
 
-# Manually test connection
-wpa_passphrase "SSID" "password" | sudo tee /etc/wpa_supplicant/wpa_supplicant.conf
-sudo wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+# Try connecting manually (replace wlanX with the real device)
+nmcli device wifi connect "SSID" password "password" ifname wlanX
 
-# Check WiFi interface
-ip link show wlan0
-sudo ip link set wlan0 up
+# Inspect NetworkManager logs for the failure reason
+journalctl -u NetworkManager -b --no-pager | tail -n 40
 ```
 
 ### General Issues
@@ -985,7 +979,7 @@ rescue-consoleview/
 │   ├── config.py                # Configuration settings
 │   ├── main.py                  # Main entry point
 │   ├── download.py              # HTTP download + JetHome API
-│   ├── network.py               # Network management (wpa_supplicant)
+│   ├── network.py               # Network management (NetworkManager/nmcli)
 │   ├── flash.py                 # eMMC flashing with xz support
 │   ├── usb.py                   # USB device detection and mounting
 │   └── utils.py                 # Helper functions and display

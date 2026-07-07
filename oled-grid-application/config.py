@@ -9,16 +9,11 @@ FRAMEBUFFER_DEVICE = '/dev/fb0'  # Linux framebuffer device for OLED
 OLED_WIDTH = 128
 OLED_HEIGHT = 64
 
-# Legacy I2C settings (not used - OLED managed by kernel driver)
-OLED_I2C_ADDRESS = 0x3C  # Standard SSD1306 address
-OLED_I2C_BUS = 1         # I2C bus number
-
 # ==================== DISPLAY SETTINGS ====================
 
 # Display Settings
 FONT_SMALL = 12   # For menu items (readable)
 FONT_NORMAL = 14  # For titles
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 
 # Fallback font paths (try in order)
 FONT_PATHS = [
@@ -33,11 +28,9 @@ TEXT_TRUNCATE = "..."
 
 # ==================== DEVICE SETTINGS ====================
 
-# Device configuration
-JETHOME_DEVICE_NAME = "JetHub"
-DEVICE = "j200"
-DEVICE_ID = "d2"
-PLATFORM = "j200"
+# Board device id / platform is auto-detected in core config
+# (env override -> /proc/device-tree/model -> fallback). This app no longer
+# overrides it, so the right images are pulled for whatever board it runs on.
 
 # Hardware devices
 EMMC_DEVICE = "/dev/mmcblk1"
@@ -51,8 +44,6 @@ TEMP_DIR = "/tmp/rescue"
 # JetHome API
 JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
-JETHOME_DEVICE = "d2"
-JETHOME_PLATFORM = "j200"
 
 # Firmware filter
 JETHOME_FIRMWARE_FILTER = [
@@ -63,37 +54,20 @@ JETHOME_FIRMWARE_FILTER = [
     "jhaos.release"
 ]
 
-# Available JetHome devices
-JETHOME_DEVICES = {
-    "j200": {
-        "name": "JetHub",
-        "device_id": "d2",
-        "platform": "j200",
-        "description": "JetHub (j200 platform)"
-    }
-}
-
-# Current selected device
-CURRENT_JETHOME_DEVICE = "j200"
 
 # Available images (empty by default, populated from API)
 AVAILABLE_IMAGES = []
 
 # Network
 NETWORK_TIMEOUT = 30
-MIN_FREE_SPACE = 1024  # MB
 DEFAULT_SERVER = ""
 
 # Download settings
 DD_BLOCK_SIZE = 4  # MB
-NETWORK_RETRY_COUNT = 3
-RETRY_DELAY = 5  # seconds
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
-USB_DETECTION_TIMEOUT = 30  # seconds
 
 # Advanced settings
-DEBUG = False
-SKIP_MOUNT_CHECK = True  # Set to False for production!
+SKIP_MOUNT_CHECK = False  # Only True for testing on a non-recovery host
 INTERACTIVE_MENU = False  # OLED uses custom menu, not curses
 SILENT_CONSOLE = True  # Disable all console output (logs only to file)
 VERBOSE_LOGS = False  # Disable verbose logging

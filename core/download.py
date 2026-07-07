@@ -12,7 +12,7 @@ from typing import Optional, List
 import config
 from utils import (
     ensure_directory, print_error, print_success, print_info, print_warning,
-    format_bytes, format_speed, format_time, print_info, print_error, show_menu, show_horizontal_menu, clear_screen
+    format_bytes, format_speed, format_time, show_menu, show_horizontal_menu, clear_screen
 )
 
 
@@ -352,21 +352,6 @@ class DownloadHandler:
                 print_warning("Failed to fetch from JetHome API, using static config")
 
         return config.AVAILABLE_IMAGES
-
-    def get_image_info(self, filename: str) -> Optional[dict]:
-        """
-        Get information about a specific image
-
-        Args:
-            filename: Image filename
-
-        Returns:
-            Image info dict or None if not found
-        """
-        for image in config.AVAILABLE_IMAGES:
-            if image['filename'] == filename:
-                return image
-        return None
 
 
 def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:

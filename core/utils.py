@@ -8,7 +8,6 @@ import subprocess
 import shutil
 import time
 import socket
-from datetime import datetime
 from typing import Tuple, Optional, List
 import config
 
@@ -250,21 +249,6 @@ def confirm_action(prompt: str, require_yes: bool = False, max_attempts: int = 5
     # Max attempts reached
     print_error(f"Maximum attempts ({max_attempts}) reached. Operation cancelled.")
     return False
-
-
-def show_progress_bar(current: int, total: int, width: int = 50, prefix: str = "Progress"):
-    """Display a progress bar"""
-    if total <= 0:
-        return
-
-    percentage = min(100, (current * 100) // total)
-    filled = (width * current) // total
-    bar = "█" * filled + "░" * (width - filled)
-
-    print(f"\r{prefix}: |{bar}| {percentage}%", end='', flush=True)
-
-    if current >= total:
-        print()  # New line when complete
 
 
 def wait_with_spinner(seconds: int, message: str = "Please wait"):

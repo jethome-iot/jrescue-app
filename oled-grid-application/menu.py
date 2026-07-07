@@ -3,7 +3,6 @@ Menu Logic and Navigation for OLED Interface
 """
 
 from input import KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACK, KEY_HOME, KEY_LEFT, KEY_RIGHT
-import time
 import config
 
 
@@ -118,18 +117,6 @@ class Menu:
             if key == KEY_HOME:
                 return -1
         return None
-
-    def show_info(self, lines, wait_for_key=True):
-        """
-        Show information screen with multiple lines
-
-        Args:
-            lines: List of text lines
-            wait_for_key: If True, wait for key press before returning
-        """
-        self.display.draw_text_screen(lines)
-        if wait_for_key:
-            self.input.wait_for_key()
 
     def confirm(self, title, message=None):
         """

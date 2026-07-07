@@ -9,12 +9,11 @@ import time
 import lzma
 from typing import Optional
 import config
-import translations as app_locale
 from translations import t
 from utils import (
-    print_error, print_success, print_info, print_warning, print_box,
-    format_bytes, format_time, check_device_exists, get_device_size, confirm_action,
-    run_command, print_info, print_error
+    print_error, print_success, print_info, print_warning,
+    format_bytes, format_time, check_device_exists, get_device_size,
+    run_command
 )
 
 
@@ -23,6 +22,32 @@ class FlashHandler:
 
     def __init__(self, emmc_device: str = None):
         self.emmc_device = emmc_device or config.EMMC_DEVICE
+
+    def _protect_offset_bytes(self) -> int:
+        """Bytes at the start of the target that must NOT be written.
+
+        See config.RECOVERY_PROTECT_MB — this covers the bootloader, its env and
+        both recovery slots, which are writable from inside recovery and would be
+        destroyed by a whole-disk dd from sector 0.
+        """
+        return max(0, int(getattr(config, 'RECOVERY_PROTECT_MB', 0))) * 1024 * 1024
+
+    def _dd_offset_args(self) -> list:
+        """dd operands that skip the protected region on both input and output.
+
+        Byte-exact (iflag=skip_bytes / oflag=seek_bytes), so it does not depend on
+        the offset being a multiple of the dd block size. iflag=fullblock makes the
+        skip exact when the input is a pipe (xz/pv). Empty when nothing is protected.
+        """
+        off = self._protect_offset_bytes()
+        if off <= 0:
+            return []
+        return [
+            'iflag=fullblock,skip_bytes',
+            'oflag=seek_bytes',
+            f'skip={off}',
+            f'seek={off}',
+        ]
 
     def verify_emmc_device(self) -> bool:
         """Verify eMMC device exists and is accessible"""
@@ -115,18 +140,12 @@ class FlashHandler:
                 print_warning("System WILL be corrupted!")
                 print()
             else:
-                print_error("Cannot flash eMMC while system is running from it!")
+                print_error("Cannot flash eMMC while a filesystem on it is mounted!")
                 print()
-                print_info("To flash eMMC, you must boot from SPI NOR rescue system:")
-                print_info("  1. Ensure SPI NOR has rescue image installed")
-                print_info("  2. Reboot the device")
-                print_info("  3. Boot from SPI NOR (partition 5)")
-                print_info("  4. Run this application again")
-                print()
-                print_warning("eMMC will NOT be mounted when booted from SPI NOR")
-                print()
-                print_info("Alternatively, set SKIP_MOUNT_CHECK = True in config.py")
-                print_warning("(ONLY for testing! Will corrupt running system!)")
+                print_info("The recovery system runs from RAM (initramfs), so the")
+                print_info("eMMC is normally not mounted here. If a partition is")
+                print_info("mounted, unmount it or re-enter recovery (hold the")
+                print_info("recovery button and power-cycle), then run this again.")
                 return False
 
         # Try to unmount non-critical partitions
@@ -152,11 +171,6 @@ class FlashHandler:
 
         print_success("Ready to flash")
         return True
-
-    def show_flash_warning(self):
-        """Display warning message before flashing"""
-        print_warning(f"⚠️  This will ERASE all data on {self.emmc_device}!")
-        print()
 
     def flash_image(self, image_path: str, verify: bool = False, skip_confirmation: bool = False) -> bool:
         """
@@ -331,7 +345,7 @@ class FlashHandler:
                     f'bs={config.DD_BLOCK_SIZE}M',
                     'conv=fsync',
                     'status=none'  # Silence dd, let pv show progress
-                ]
+                ] + self._dd_offset_args()
 
                 try:
                     # Start pv process (reads compressed file) with unbuffered output
@@ -437,7 +451,7 @@ class FlashHandler:
                     f'of={self.emmc_device}',
                     f'bs={config.DD_BLOCK_SIZE}M',
                     'conv=fsync'
-                ]
+                ] + self._dd_offset_args()
 
                 # Check if dd supports status=progress
                 returncode, _, _ = run_command(['dd', '--help'], check=False)
@@ -513,6 +527,21 @@ class FlashHandler:
 
                     # Get underlying file object for tracking compressed bytes
                     compressed_fp = src._fp if hasattr(src, '_fp') else None
+
+                    # Preserve the protected recovery region (see _dd_offset_args):
+                    # discard the image's first RECOVERY_PROTECT_MB of decompressed
+                    # data and write the rest at that offset. dst is a block device,
+                    # so seeking past [0, offset) leaves that region untouched.
+                    protect_offset = self._protect_offset_bytes()
+                    if protect_offset > 0:
+                        remaining = protect_offset
+                        while remaining > 0:
+                            skip_chunk = src.read(min(buffer_size, remaining))
+                            if not skip_chunk:
+                                print_error("Image smaller than protected region — aborting")
+                                return False
+                            remaining -= len(skip_chunk)
+                        dst.seek(protect_offset)
 
                     while True:
                         chunk = src.read(buffer_size)
@@ -597,7 +626,7 @@ class FlashHandler:
                 f'bs={config.DD_BLOCK_SIZE}M',
                 'conv=fsync',
                 'status=none'  # Silence dd
-            ]
+            ] + self._dd_offset_args()
 
             try:
                 # Start pv process with unbuffered stderr
@@ -685,7 +714,7 @@ class FlashHandler:
                 f'of={self.emmc_device}',
                 f'bs={config.DD_BLOCK_SIZE}M',
                 'conv=fsync'
-            ]
+            ] + self._dd_offset_args()
 
             # Check if dd supports status=progress
             returncode, stdout, _ = run_command(['dd', '--help'], check=False)
@@ -744,105 +773,4 @@ def select_target_device() -> Optional[str]:
     else:
         return None
 
-
-def select_image_to_flash() -> Optional[str]:
-    """
-    Interactive function to select an image file to flash using arrow keys
-
-    Returns:
-        Path to selected image or None
-    """
-    from utils import show_menu
-
-    temp_dir = config.TEMP_DIR
-
-    if not os.path.exists(temp_dir):
-        print_error(f"Temporary directory not found: {temp_dir}")
-        return None
-
-    # Find image files
-    image_files = []
-
-    try:
-        for filename in os.listdir(temp_dir):
-            if filename.endswith(('.img', '.img.xz', '.xz')):
-                filepath = os.path.join(temp_dir, filename)
-                size = os.path.getsize(filepath)
-                image_files.append({
-                    'filename': filename,
-                    'path': filepath,
-                    'size': size
-                })
-    except Exception as e:
-        print_error(f"Error scanning directory: {e}")
-        return None
-
-    if not image_files:
-        print_error("No image files found in temporary directory")
-        print_info(f"Directory: {temp_dir}")
-        print_info("Please download an image first")
-        return None
-
-    # Sort by filename
-    image_files.sort(key=lambda x: x['filename'])
-
-    # Build menu options
-    options = []
-
-    # Add "Back/Cancel" option at the top
-    options.append("← Back / Cancel")
-
-    for image in image_files:
-        size_str = format_bytes(image['size'])
-        option = f"{image['filename']} - {size_str}"
-        options.append(option)
-
-    # Show interactive menu
-    choice = show_menu("Select Image to Flash", options)
-
-    if choice == 0 or choice == 1:
-        # Cancelled or "Back" selected
-        return None
-    elif 2 <= choice <= len(image_files) + 1:
-        # Selected an image (adjusted for "Back" option)
-        return image_files[choice - 2]['path']
-    else:
-        return None
-
-
-def flash_image_interactive() -> bool:
-    """
-    Interactive function to flash an image to eMMC
-
-    Returns:
-        True if successful, False otherwise
-    """
-    # Select target device first
-    print_info("Step 1: Select target device")
-    print()
-
-    target_device = select_target_device()
-    if not target_device:
-        print_info("No device selected")
-        return False
-
-    print()
-    print_success(f"Selected target device: {target_device}")
-    print()
-
-    # Select image
-    print_info("Step 2: Select image to flash")
-    print()
-
-    image_path = select_image_to_flash()
-    if not image_path:
-        return False
-
-    print()
-
-    # Create handler with selected device
-    handler = FlashHandler(emmc_device=target_device)
-
-    # Flash
-    return handler.flash_image(image_path)
 

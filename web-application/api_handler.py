@@ -7,13 +7,11 @@ operations with progress tracking.
 """
 
 # Standard library imports
-import json
 import os
 import sys
 import threading
 import time
-import traceback
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Add core directory to path
 _core_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core')
@@ -571,7 +569,7 @@ class APIHandler:
             # Format disk space
             disk_space = {
                 'free': free_bytes,
-                'free_human': self._format_bytes(free_bytes)
+                'free_human': format_bytes(free_bytes)
             }
 
             return {
@@ -581,23 +579,6 @@ class APIHandler:
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
-
-    def _format_bytes(self, bytes: int) -> str:
-        """Format bytes to human readable string
-
-        Args:
-            bytes: Size in bytes
-
-        Returns:
-            Formatted string (e.g., '1.5 MB')
-        """
-        if bytes == 0:
-            return '0 B'
-        k = 1024
-        sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-        i = int(bytes) if bytes > 0 else 0
-        i = min(len(sizes) - 1, max(0, int(bytes).bit_length() // 10))
-        return f"{round(bytes / (k ** i), 2)} {sizes[i]}"
 
     def post_system_reboot(self) -> Dict[str, Any]:
         """POST /api/system/reboot - Reboot system

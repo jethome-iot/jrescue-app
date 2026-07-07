@@ -59,7 +59,7 @@ def wifi_setup(menu):
     # Get network handler
     handler = get_network_handler()
     if not handler:
-        result = menu.show_message(t("error"), "wpa_supplicant\nnot found")
+        result = menu.show_message(t("error"), "NetworkManager\nnot found")
         if result == -1:
             return -1  # Home
         return None  # Back
@@ -152,7 +152,7 @@ def test_connectivity(menu):
     """
     handler = get_network_handler()
     if not handler:
-        result = menu.show_message(t("error"), "wpa_supplicant\nnot found")
+        result = menu.show_message(t("error"), "NetworkManager\nnot found")
         if result == -1:
             return -1  # Home
         return None  # Back

@@ -35,10 +35,8 @@ def initialize():
         Tuple of (display, input_handler, menu) or None if failed
     """
     try:
-        # Set device permanently
-        src_config.CURRENT_JETHOME_DEVICE = oled_config.DEVICE
-        src_config.JETHOME_DEVICE = oled_config.DEVICE_ID
-        src_config.JETHOME_PLATFORM = oled_config.PLATFORM
+        # Board (device id / platform) is auto-detected in core config
+        # (env override -> /proc/device-tree/model -> fallback); do not clobber it.
 
         # Initialize display
         print("Initializing OLED display...")

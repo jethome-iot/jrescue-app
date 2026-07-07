@@ -9,8 +9,8 @@ from typing import List, Optional
 import config
 from utils import (
     run_command, print_error, print_success, print_info, print_warning,
-    ensure_directory, is_mounted, print_info, print_error, wait_with_spinner,
-    show_menu, clear_screen
+    ensure_directory, is_mounted,
+    show_menu
 )
 
 
@@ -83,42 +83,6 @@ class USBHandler:
                         })
 
         return usb_devices
-
-    def wait_for_usb(self, timeout: int = None) -> Optional[List[dict]]:
-        """
-        Wait for USB device to be mounted at USB_MOUNT_POINT
-
-        Args:
-            timeout: Timeout in seconds (None = use config default)
-
-        Returns:
-            List of USB devices or None if timeout
-        """
-        if timeout is None:
-            timeout = config.USB_DETECTION_TIMEOUT
-
-        print_info(f"Waiting for USB device at {self.mount_point} (timeout: {timeout}s)...")
-        print_info("Please insert a USB drive and mount it")
-
-        start_time = time.time()
-        last_check_time = 0
-
-        while time.time() - start_time < timeout:
-            # Check every 2 seconds
-            if time.time() - last_check_time >= 2:
-                devices = self.detect_usb_devices()
-                if devices:
-                    print_success(f"Found {len(devices)} USB device(s) at {self.mount_point}")
-                    return devices
-                last_check_time = time.time()
-
-            remaining = int(timeout - (time.time() - start_time))
-            print(f"\rWaiting... ({remaining}s remaining)", end='', flush=True)
-            time.sleep(0.5)
-
-        print()
-        print_warning(f"No USB device found at {self.mount_point}")
-        return None
 
     def mount_device(self, device: str, mount_point: str = None) -> bool:
         """
@@ -271,86 +235,6 @@ class USBHandler:
             print_warning("No image files found")
 
         return images
-
-    def copy_image_from_usb(self, source_path: str, dest_dir: str = None) -> Optional[str]:
-        """
-        Copy image from USB to destination directory
-
-        NOTE: This function is NOT used in main workflow.
-        Images are flashed directly from USB without copying (streaming decompression).
-        Kept for backward compatibility or manual use.
-
-        Args:
-            source_path: Full path to image on USB
-            dest_dir: Destination directory (default: config.TEMP_DIR)
-
-        Returns:
-            Path to copied file or None if failed
-        """
-        if dest_dir is None:
-            dest_dir = config.TEMP_DIR
-
-        ensure_directory(dest_dir)
-
-        filename = os.path.basename(source_path)
-        dest_path = os.path.join(dest_dir, filename)
-
-        # Check if already exists
-        if os.path.exists(dest_path):
-            # Check if same size
-            try:
-                source_size = os.path.getsize(source_path)
-                dest_size = os.path.getsize(dest_path)
-
-                if source_size == dest_size:
-                    print_info(f"File {filename} already exists with same size, skipping copy")
-                    return dest_path
-            except OSError:
-                pass
-
-        print_info(f"Copying {filename}...")
-        print_warning("This may take several minutes depending on file size")
-
-        try:
-            # Get source size for progress
-            source_size = os.path.getsize(source_path)
-        except OSError:
-            source_size = 0
-
-        # Use dd for copying with progress (if pv is available) or cp
-        if source_size > 0:
-            # Try with pv for progress
-            from utils import check_command_exists
-            if check_command_exists('pv'):
-                returncode, _, stderr = run_command(
-                    ['pv', source_path],
-                    check=False
-                )
-
-                if returncode == 0:
-                    with open(dest_path, 'wb') as f:
-                        run_command(['pv', source_path], check=False, capture=False)
-
-                    returncode = 0
-                else:
-                    # Fallback to cp
-                    returncode, _, stderr = run_command(['cp', source_path, dest_path], check=False, capture=False)
-            else:
-                # Use cp with verbose
-                print_info("Copying... (no progress indicator available)")
-                returncode, _, stderr = run_command(['cp', '-v', source_path, dest_path], check=False, capture=False)
-        else:
-            returncode, _, stderr = run_command(['cp', source_path, dest_path], check=False)
-
-        if returncode == 0:
-            print_success(f"Copied to {dest_path}")
-            print_info(f"Copied {filename} from USB")
-            return dest_path
-        else:
-            print_error(f"Copy failed: {stderr}")
-            print_error(f"Copy failed: {stderr}")
-            return None
-
 
 def list_usb_devices_interactive() -> Optional[dict]:
     """
