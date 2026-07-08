@@ -42,16 +42,10 @@ USB_MOUNT_POINT = "/mnt/usb"
 TEMP_DIR = "/tmp/rescue"
 
 # JetHome API
-JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
-
-
-# Available images (empty by default, populated from API)
-AVAILABLE_IMAGES = []
 
 # Network
 NETWORK_TIMEOUT = 30
-DEFAULT_SERVER = ""
 
 # Download settings
 DD_BLOCK_SIZE = 4  # MB

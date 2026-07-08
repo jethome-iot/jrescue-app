@@ -605,7 +605,6 @@ def system_info_menu():
     print(f"  eMMC Device:   {config.EMMC_DEVICE}")
     print(f"  Temp Dir:      {config.TEMP_DIR}")
     print(f"  USB Mount:     {config.USB_MOUNT_POINT}")
-    print(f"  Server URL:    {config.DEFAULT_SERVER}")
     print()
 
     # Network status

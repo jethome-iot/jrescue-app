@@ -7,24 +7,9 @@ import re
 
 # ==================== NETWORK SETTINGS ====================
 
-# Default HTTP server for downloading images
-# Only used when JETHOME_API_ENABLED = False
-# Example: "http://192.168.1.100:8000" (use example_server.py to host images)
-DEFAULT_SERVER = ""
-
-# JetHome API settings (for automatic firmware discovery)
-JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
 
 # JetHome device configuration.
-# The board is detected at runtime so the app pulls the right images from the
-# REST API automatically. Resolution order:
-#   1. JETHOME_DEVICE / JETHOME_PLATFORM environment variables (manual override)
-#   2. BOARD / BOARD_NAME environment variables set by the recovery system
-#      (e.g. BOARD="jethub-j100", BOARD_NAME="JetHome JetHub J100")
-#   3. /proc/device-tree/model, e.g. "JetHome JetHub D1 (J100)" -> d1 / j100
-#   4. fallback default (JetHub D1 / J100)
-# Known boards: platform code -> (REST API device id, human name)
 JETHOME_BOARDS = {
     "j100": ("d1", "JetHub D1 (J100)"),
     "j200": ("d2", "JetHub D2 (J200)"),
@@ -110,26 +95,7 @@ TEMP_DIR = "/tmp/rescue"
 # USB mount point
 USB_MOUNT_POINT = "/mnt/usb"
 
-# Minimum free space required in RAM (in bytes) - 600MB
-# Нужно только для хранения СЖАТОГО образа .img.xz
-# Распаковка идёт потоком через xzcat прямо в eMMC, не требует дополнительного места
 MIN_FREE_SPACE = 600 * 1024 * 1024
-
-# ==================== IMAGE SETTINGS ====================
-
-# Available images list (used only when JETHOME_API_ENABLED = False)
-# When JetHome API is enabled, this list is ignored
-# Format: {"name": "Display Name", "filename": "image.img.xz", "size_mb": 1024}
-AVAILABLE_IMAGES = [
-    # Добавьте свои образы здесь, если отключите JetHome API
-    # Пример:
-    # {
-    #     "name": "Custom Image",
-    #     "filename": "custom-image.img.xz",
-    #     "size_mb": 2048,
-    #     "description": "Custom description"
-    # }
-]
 
 # ==================== APPLICATION SETTINGS ====================
 

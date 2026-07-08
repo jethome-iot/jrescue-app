@@ -110,10 +110,7 @@ def flash_from_http(menu):
     def download_thread():
         """Download in background thread"""
         try:
-            if 'url' in image:
-                result = handler.download_file(image['url'], dest_filename=image['filename'])
-            else:
-                result = handler.download_file(image['filename'])
+            result = handler.download_file(image['url'], dest_filename=image['filename'])
             downloaded_path[0] = result
             if not result:
                 download_error[0] = True

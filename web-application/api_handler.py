@@ -175,21 +175,20 @@ class APIHandler:
             images = []
 
             # Get JetHome API images
-            if config.JETHOME_API_ENABLED:
-                try:
-                    jethome_images = download_handler.fetch_jethome_images()
-                    for img in jethome_images:
-                        images.append({
-                            'source': 'jethome',
-                            'name': img.get('name', 'Unknown'),
-                            'version': img.get('version', 'N/A'),
-                            'date': img.get('date', 'N/A'),
-                            'size': img.get('size', 0),
-                            'url': img.get('url', ''),
-                            'filename': img.get('filename', '')
-                        })
-                except Exception as e:
-                    print(f"Failed to fetch JetHome images: {e}")
+            try:
+                jethome_images = download_handler.fetch_jethome_images()
+                for img in jethome_images or []:
+                    images.append({
+                        'source': 'jethome',
+                        'name': img.get('name', 'Unknown'),
+                        'version': img.get('version', 'N/A'),
+                        'date': img.get('date', 'N/A'),
+                        'size': img.get('size', 0),
+                        'url': img.get('url', ''),
+                        'filename': img.get('filename', '')
+                    })
+            except Exception as e:
+                print(f"Failed to fetch JetHome images: {e}")
 
             return {
                 'success': True,

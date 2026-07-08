@@ -19,10 +19,8 @@ from utils import (
 class DownloadHandler:
     """Handle HTTP downloads with progress tracking"""
 
-    def __init__(self, server_url: str = None):
-        self.server_url = server_url or config.DEFAULT_SERVER
+    def __init__(self):
         self.temp_dir = config.TEMP_DIR
-        self.use_jethome_api = config.JETHOME_API_ENABLED
         ensure_directory(self.temp_dir)
 
     def _create_ssl_context(self):
@@ -40,9 +38,6 @@ class DownloadHandler:
         Returns:
             List of image dicts or None if failed
         """
-        if not self.use_jethome_api:
-            return None
-
         # Use current device from config
         device_id = config.JETHOME_DEVICE
         device_name = config.JETHOME_DEVICE_NAME
@@ -149,14 +144,13 @@ class DownloadHandler:
 
         ensure_directory(dest_dir)
 
-        # Check if it's a full URL or just a filename
-        if filename_or_url.startswith('http://') or filename_or_url.startswith('https://'):
-            url = filename_or_url
-            if dest_filename is None:
-                dest_filename = os.path.basename(url.split('?')[0])
-        else:
-            url = f"{self.server_url}/{filename_or_url}"
-            dest_filename = dest_filename or filename_or_url
+        # Images always come from the JetHome API as full URLs.
+        if not (filename_or_url.startswith('http://') or filename_or_url.startswith('https://')):
+            print_error(f"Expected a full image URL, got: {filename_or_url}")
+            return None
+        url = filename_or_url
+        if dest_filename is None:
+            dest_filename = os.path.basename(url.split('?')[0])
 
         dest_path = os.path.join(dest_dir, dest_filename)
         temp_path = dest_path + ".partial"
@@ -317,50 +311,9 @@ class DownloadHandler:
 
         return None
 
-    def test_server_connection(self) -> bool:
-        """Test if server is reachable"""
-        print_info(f"Testing connection to {self.server_url}...")
-
-        try:
-            req = urllib.request.Request(self.server_url, method='HEAD')
-            response = urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT)
-
-            print_success("Server is reachable")
-            return True
-
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                # 404 means server responded, just no index page
-                print_success("Server is reachable")
-                return True
-            else:
-                print_error(f"Server error: HTTP {e.code}")
-                return False
-
-        except urllib.error.URLError as e:
-            print_error(f"Cannot reach server: {e.reason}")
-            return False
-
-        except Exception as e:
-            print_error(f"Connection test failed: {e}")
-            return False
-
     def list_available_images(self) -> list:
-        """
-        Get list of available images from configuration or JetHome API
-
-        Returns:
-            List of image dicts
-        """
-        # Try JetHome API first if enabled
-        if self.use_jethome_api:
-            images = self.fetch_jethome_images()
-            if images:
-                return images
-            else:
-                print_warning("Failed to fetch from JetHome API, using static config")
-
-        return config.AVAILABLE_IMAGES
+        """Get the list of available images from the JetHome API."""
+        return self.fetch_jethome_images() or []
 
 
 def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
@@ -376,10 +329,7 @@ def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
     if not images:
         clear_screen()
         print_error("No images available")
-        if handler.use_jethome_api:
-            print_info("Failed to fetch from JetHome API and no static images configured")
-        else:
-            print_info("Please add images to config.AVAILABLE_IMAGES")
+        print_info("Failed to fetch the image list from the JetHome API")
         return None
 
     # Build menu options
@@ -435,14 +385,6 @@ def download_image_interactive() -> Optional[str]:
     """
     handler = DownloadHandler()
 
-    # Test server connection only if NOT using JetHome API
-    if not handler.use_jethome_api:
-        if not handler.test_server_connection():
-            print_error("Cannot connect to server")
-            print_info(f"Current server: {handler.server_url}")
-            print_info(f"You can change it in config.py: DEFAULT_SERVER")
-            return None
-
     # Select image
     image = select_image_interactive(handler)
     if not image:
@@ -471,11 +413,6 @@ def download_image_interactive() -> Optional[str]:
 
     print()
 
-    # Download - check if we have a full URL or just filename
-    if 'url' in image:
-        # Full URL (e.g., from JetHome API)
-        return handler.download_file(image['url'], dest_filename=image['filename'])
-    else:
-        # Just filename (from static config)
-        return handler.download_file(image['filename'])
+    # Download from the JetHome API (always a full URL)
+    return handler.download_file(image['url'], dest_filename=image['filename'])
 
