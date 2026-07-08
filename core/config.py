@@ -100,7 +100,7 @@ MIN_FREE_SPACE = 600 * 1024 * 1024
 # ==================== APPLICATION SETTINGS ====================
 
 # Application version
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 # Enable verbose console output (info messages, progress, etc.)
 # Set to False to minimize console output
