@@ -45,15 +45,6 @@ TEMP_DIR = "/tmp/rescue"
 JETHOME_API_ENABLED = True
 JETHOME_API_BASE = "https://fw.jethome.com"
 
-# Firmware filter
-JETHOME_FIRMWARE_FILTER = [
-    "armbian.nightly.trixie.edge",
-    "armbian.nightly.jammy.edge",
-    "armbian.nightly.noble.edge",
-    "armbian.nightly.bookworm.edge",
-    "jhaos.release"
-]
-
 
 # Available images (empty by default, populated from API)
 AVAILABLE_IMAGES = []

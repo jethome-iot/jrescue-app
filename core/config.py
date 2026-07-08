@@ -20,8 +20,10 @@ JETHOME_API_BASE = "https://fw.jethome.com"
 # The board is detected at runtime so the app pulls the right images from the
 # REST API automatically. Resolution order:
 #   1. JETHOME_DEVICE / JETHOME_PLATFORM environment variables (manual override)
-#   2. /proc/device-tree/model, e.g. "JetHome JetHub D1 (J100)" -> d1 / j100
-#   3. fallback default (JetHub D1 / J100)
+#   2. BOARD / BOARD_NAME environment variables set by the recovery system
+#      (e.g. BOARD="jethub-j100", BOARD_NAME="JetHome JetHub J100")
+#   3. /proc/device-tree/model, e.g. "JetHome JetHub D1 (J100)" -> d1 / j100
+#   4. fallback default (JetHub D1 / J100)
 # Known boards: platform code -> (REST API device id, human name)
 JETHOME_BOARDS = {
     "j100": ("d1", "JetHub D1 (J100)"),
@@ -43,13 +45,21 @@ def _read_dt_model() -> str:
 def detect_board():
     """Resolve (device_id, platform, name) for the fw.jethome.com REST API."""
     model = _read_dt_model()
+    board = os.environ.get('BOARD', '')            # e.g. "jethub-j100"
+    board_name = os.environ.get('BOARD_NAME', '')  # e.g. "JetHome JetHub J100"
 
+    # platform, e.g. "j100" — from an explicit override, the recovery env vars,
+    # or the device-tree model (first source yielding a "jNNN" code wins).
     platform = os.environ.get('JETHOME_PLATFORM')
     if not platform:
-        m = re.search(r'\(J(\d+)\)', model)      # "(J100)" -> j100
-        if m:
-            platform = "j" + m.group(1)
+        for src in (board, board_name, model):
+            m = re.search(r'j(\d+)', src, re.IGNORECASE)
+            if m:
+                platform = "j" + m.group(1)
+                break
 
+    # device id, e.g. "d1" — from an explicit override, the known-board map,
+    # or the "Dx" token in the device-tree model.
     device = os.environ.get('JETHOME_DEVICE')
     if not device:
         if platform in JETHOME_BOARDS:
@@ -59,10 +69,10 @@ def detect_board():
             if m:
                 device = "d" + m.group(1)
 
-    # Fallbacks for running off-hardware without an override
+    # Fallbacks for running off-hardware without any of the above
     platform = platform or "j100"
     device = device or JETHOME_BOARDS.get(platform, ("d1",))[0]
-    name = model or JETHOME_BOARDS.get(platform, (None, "JetHub"))[1]
+    name = board_name or model or JETHOME_BOARDS.get(platform, (None, "JetHub"))[1]
     return device, platform, name
 
 
@@ -119,16 +129,6 @@ AVAILABLE_IMAGES = [
     #     "size_mb": 2048,
     #     "description": "Custom description"
     # }
-]
-
-# JetHome firmware types to show (filter by these keys)
-# Set to None to show all available firmware types
-JETHOME_FIRMWARE_FILTER = [
-    "armbian.nightly.trixie.edge",
-    "armbian.nightly.jammy.edge",
-    "armbian.nightly.noble.edge",
-    "armbian.nightly.bookworm.edge",
-    "jhaos.release"
 ]
 
 # ==================== APPLICATION SETTINGS ====================

@@ -67,19 +67,22 @@ class DownloadHandler:
             images = []
             firmware_types = data['latest_firmware']
 
-            # Filter firmware types if configured
-            if config.JETHOME_FIRMWARE_FILTER:
-                firmware_types = {k: v for k, v in firmware_types.items()
-                                 if k in config.JETHOME_FIRMWARE_FILTER}
+            # The API response is already scoped to one board; confirm it matches
+            # the board we detected via the structured 'platform' field (e.g.
+            # "j100") instead of a hard-coded firmware-type whitelist.
+            api_platform = data.get('platform', '')
+            expected = getattr(config, 'JETHOME_PLATFORM', '')
+            if expected and api_platform and api_platform != expected:
+                print_warning(f"API platform '{api_platform}' does not match detected '{expected}'")
 
             for fw_type, fw_data in firmware_types.items():
-                # Only process if sdcard image exists
-                if 'images' not in fw_data or 'sdcard' not in fw_data['images']:
+                # Keep only entries with a flashable sdcard image. This skips
+                # Windows-only tools (e.g. BurnTools) and entries with no image
+                # (e.g. armbianha) automatically — no need to name them.
+                sdcard = fw_data.get('images', {}).get('sdcard')
+                if not sdcard or not sdcard.get('url'):
                     continue
 
-                sdcard = fw_data['images']['sdcard']
-
-                # Create image entry
                 image = {
                     'name': f"{fw_type} v{fw_data['version']}",
                     'filename': os.path.basename(sdcard['url']),
@@ -93,6 +96,12 @@ class DownloadHandler:
                 }
 
                 images.append(image)
+
+            # Newest builds first (ISO-8601 dates sort lexicographically; unknowns last)
+            images.sort(
+                key=lambda im: im['date'] if im.get('date') and im['date'] != 'unknown' else '',
+                reverse=True
+            )
 
             if images:
                 print_success(f"Found {len(images)} firmware images")
