@@ -55,12 +55,42 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   layer was removed. NM runs its own DHCP.
 - **Interfaces are auto-detected** (nmcli device enumeration). Do **not** hardcode
   `wlan0` / `eth0`. `config.WIFI_INTERFACE` / `ETHERNET_INTERFACE` are fallbacks only.
-- **Board is auto-detected** in `core/config.py: detect_board()`:
-  env `JETHOME_DEVICE` / `JETHOME_PLATFORM` override → `/proc/device-tree/model`
-  (`"JetHome JetHub D1 (J100)"` → `d1` / `j100`; regex `Dx`→`dx`, `(Jxxx)`→`jxxx`) →
-  fallback `d1` / `j100`. Do **not** hardcode `d2` / `j200`.
+- **Board is auto-detected** in `core/config.py: detect_board()`, in priority order:
+  env `JETHOME_DEVICE` / `JETHOME_PLATFORM` (manual override) → env `BOARD` /
+  `BOARD_NAME` set by the recovery system (`BOARD=jethub-j100`) →
+  `/proc/device-tree/model` (`"JetHome JetHub D1 (J100)"` → `d1` / `j100`) →
+  fallback `d1` / `j100`. Do **not** hardcode `d2` / `j200`. Note: `BOARD` lives in
+  the login-shell env only — systemd services won't see it, which is why the
+  device-tree source must stay.
+- **Downloads are JetHome-API-only.** `core/download.py` lists images from
+  `/api/devices/{id}/info` (only entries with a `sdcard` image, newest first) and
+  downloads by full URL. There is no static server / `AVAILABLE_IMAGES` /
+  `DEFAULT_SERVER` path anymore; offline flashing goes through USB.
+- **The console UI is curses-only, including waits and progress.** Menus/dialogs:
+  `show_menu`, `show_horizontal_menu`, `input_dialog`, `confirm_action`; screens:
+  `show_text_screen` (scrollable report), `show_wait_screen` (spinner around a
+  blocking call, captures its stdout), `show_progress_screen` (bar; runs a
+  `worker(progress)` in a thread), `show_confirm_screen` (info + NO/YES). All in
+  `core/utils.py`; Python `curses` is guaranteed via `select BR2_PACKAGE_PYTHON3_CURSES`.
+  Esc = cancel. Do NOT add plain `print`/`press_enter` steps between curses screens —
+  they flash and corrupt the flow; route long operations through
+  `progress_cb` (supported by `download_file` and `flash_image`/`pv -n`) or a wait
+  screen, and show captured output via `show_text_screen`.
+- **Version lives in the git tag only.** `core/config.py: APP_VERSION = "dev"` in
+  checkouts; the release workflow (`.github/workflows/release.yml`) stamps the
+  `vX.Y.Z` tag into the tarball on release and updates the README version line.
+  Never hand-edit APP_VERSION. Buildroot pins the consumed release via
+  `JRESCUE_APP_VERSION` in `jrescue-app.mk`.
 - **Python 3.14** in the image (3.7+ to run elsewhere). Standard library only, except
   **Pillow** and **python-evdev** (OLED). No build tools, no web frameworks.
+- **No `__init__.py`** except `oled-grid-application/screens/` (the only real
+  package). Do not re-add them — modules are imported bare via `sys.path`.
+- **Buildroot side:** `package/jrescue-app/Config.in` `select`s all runtime deps
+  (python3 + curses/ssl/xz/zlib, Pillow/freetype/dejavu, evdev, ncurses, pv) —
+  defconfigs only set `BR2_PACKAGE_JRESCUE_APP=y`. NetworkManager/dnsmasq/wpa stay
+  in the defconfig (system stack). `WPA_SUPPLICANT_AP_SUPPORT` + `DNSMASQ` are
+  enabled for the planned Wi-Fi AP provisioning (hotspot + QR + captive portal —
+  designed, not yet implemented in the app).
 
 ## Flash safety (CRITICAL)
 
@@ -103,6 +133,15 @@ recovery slots and brick the recovery path itself.
   duplicate each other.
 - The web UI loads **Bootstrap from a CDN** → broken offline (recovery has no internet
   by default). Should be vendored into `static/`.
-- jrescue-app has **no systemd autostart unit** in the recovery image yet.
+- Autostart units live in the buildroot overlay (`jrescue-console@.service` per-tty,
+  `jrescue-web.service` global, `jrescue-oled.service` J310-only wants-symlink).
+- **Wi-Fi AP provisioning** (board raises a hotspot, phone joins via a QR printed on
+  the UART console, captive portal collects the home-network password) is fully
+  designed but not implemented; buildroot prerequisites are already in the defconfig.
+  Key constraints from the design: the radio is single (AP↔STA strictly sequential —
+  scan BEFORE raising the AP), success = IP **and** gateway reachable, always roll
+  back to the AP on failure. Current Wi-Fi hardware focus: Realtek RTL8822CS via
+  `rtw88` (mac80211).
 - A larger modernization (single daemon backend, RAUC-based recovery self-update,
-  download checksum/signature verification) is planned but deferred.
+  download checksum/signature verification — note: the fw API's `hash` field is a
+  PGP signature) is planned but deferred.

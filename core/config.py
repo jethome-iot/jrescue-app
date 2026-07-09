@@ -5,6 +5,11 @@ Configuration file for Rescue Console Application
 import os
 import re
 
+# Application version. "dev" in git checkouts; the release workflow stamps the
+# real version from the vX.Y.Z git tag into the release tarball, so the tag is
+# the single source of truth.
+APP_VERSION = "dev"
+
 # ==================== NETWORK SETTINGS ====================
 
 JETHOME_API_BASE = "https://fw.jethome.com"
@@ -98,11 +103,6 @@ USB_MOUNT_POINT = "/mnt/usb"
 MIN_FREE_SPACE = 600 * 1024 * 1024
 
 # ==================== APPLICATION SETTINGS ====================
-
-# Application version. "dev" in git checkouts; the release workflow stamps the
-# real version from the vX.Y.Z git tag into the release tarball, so the tag is
-# the single source of truth.
-APP_VERSION = "dev"
 
 # Enable verbose console output (info messages, progress, etc.)
 # Set to False to minimize console output

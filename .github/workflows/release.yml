@@ -36,3 +36,17 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             jrescue-app-*.tar.gz
+
+      - name: Update current version in README (commit to master)
+        run: |
+          git fetch origin master
+          git checkout -B master origin/master
+          sed -i -E "s|^\*\*Current version:\*\* v.*|**Current version:** ${GITHUB_REF_NAME}|" README.md
+          if git diff --quiet README.md; then
+            echo "README already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "README: current version ${GITHUB_REF_NAME}" README.md
+          git push origin master
