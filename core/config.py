@@ -99,8 +99,10 @@ MIN_FREE_SPACE = 600 * 1024 * 1024
 
 # ==================== APPLICATION SETTINGS ====================
 
-# Application version
-APP_VERSION = "1.3.2"
+# Application version. "dev" in git checkouts; the release workflow stamps the
+# real version from the vX.Y.Z git tag into the release tarball, so the tag is
+# the single source of truth.
+APP_VERSION = "dev"
 
 # Enable verbose console output (info messages, progress, etc.)
 # Set to False to minimize console output
