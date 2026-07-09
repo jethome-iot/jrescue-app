@@ -37,7 +37,6 @@ for attr in dir(core_config):
 # ==================== WEB-SPECIFIC OVERRIDES ====================
 
 # Override settings for web interface
-INTERACTIVE_MENU = False  # Disable curses menu for web
 SILENT_CONSOLE = True      # Disable console output (use logging instead)
 VERBOSE_LOGS = False       # Disable verbose logging for web service
 

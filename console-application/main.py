@@ -584,63 +584,52 @@ def flash_image_menu():
 
 
 def system_info_menu():
-    """Display system information"""
-    clear_screen()
-    print_header("SYSTEM INFORMATION")
+    """Display system information in a scrollable curses screen."""
+    from utils import show_text_screen
 
     info = get_system_info()
 
-    print(f"  Hostname:      {info['hostname']}")
-    print(f"  Kernel:        {info['kernel']}")
-    print(f"  Architecture:  {info['arch']}")
-    print(f"  Memory:        {info['memory']}")
-    print(f"  Free Space:    {info['disk_free']}")
-    print()
-
-    # Current device
-    print(f"  Device:        {config.JETHOME_DEVICE_NAME}")
-    print(f"  Platform:      {config.JETHOME_PLATFORM}")
-    print()
-
-    print(f"  eMMC Device:   {config.EMMC_DEVICE}")
-    print(f"  Temp Dir:      {config.TEMP_DIR}")
-    print(f"  USB Mount:     {config.USB_MOUNT_POINT}")
-    print()
+    lines = [
+        f"Hostname:      {info['hostname']}",
+        f"Kernel:        {info['kernel']}",
+        f"Architecture:  {info['arch']}",
+        f"Memory:        {info['memory']}",
+        f"Free Space:    {info['disk_free']}",
+        "",
+        f"Device:        {config.JETHOME_DEVICE_NAME}",
+        f"Platform:      {config.JETHOME_PLATFORM}",
+        "",
+        f"eMMC Device:   {config.EMMC_DEVICE}",
+        f"Temp Dir:      {config.TEMP_DIR}",
+        f"USB Mount:     {config.USB_MOUNT_POINT}",
+        "",
+    ]
 
     # Network status
     network_handler = get_network_handler()
     if network_handler:
         status = network_handler.get_connection_status()
         if status['connected']:
-            print_success(f"Network: Connected ({status['interface']})")
+            lines.append(f"Network:       Connected ({status['interface']})")
             if status['ip']:
-                print(f"  IP Address:    {status['ip']}")
+                lines.append(f"IP Address:    {status['ip']}")
             if status['ssid']:
-                print(f"  WiFi:          {status['ssid']}")
+                lines.append(f"WiFi:          {status['ssid']}")
         else:
-            print_info("Network: Not connected")
+            lines.append("Network:       Not connected")
 
-    print()
+    lines.append("")
 
     # Web application status
     web_port = 8124
-    web_running = check_web_app_status("localhost", web_port)
-
-    if web_running:
-        print_success(f"Web Application: Running on port {web_port}")
-
-        # Get local IP for access
-        local_ip = get_local_ip()
-        if local_ip:
-            web_url = f"http://{local_ip}:{web_port}"
-            print(f"  Access URL:    {create_clickable_link(web_url, web_url)}")
-        else:
-            web_url = f"http://localhost:{web_port}"
-            print(f"  Access URL:    {create_clickable_link(web_url, web_url)}")
+    if check_web_app_status("localhost", web_port):
+        local_ip = get_local_ip() or "localhost"
+        lines.append("Web UI:        Running")
+        lines.append(f"Access URL:    http://{local_ip}:{web_port}")
     else:
-        print_warning(f"Web Application: Not running (port {web_port})")
+        lines.append(f"Web UI:        Not running (port {web_port})")
 
-    press_enter_to_continue()
+    show_text_screen("SYSTEM INFORMATION", lines)
 
 
 def main_menu():

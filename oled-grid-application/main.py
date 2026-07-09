@@ -43,7 +43,7 @@ def initialize():
         display = DisplayManager()
 
         # Show splash screen
-        display.draw_splash(oled_config.APP_NAME, oled_config.APP_VERSION)
+        display.draw_splash(oled_config.APP_NAME, src_config.APP_VERSION)
         time.sleep(2)
 
         # Initialize input

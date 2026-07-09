@@ -134,9 +134,6 @@ TRANSLATIONS = {
 
         # Common
         "press_enter": "Press Enter to continue...",
-        "enter_choice": "Enter your choice: ",
-        "invalid_choice": "Invalid choice. Please enter 1-{max}",
-        "invalid_input": "Invalid input. Please enter a number.",
         "error": "ERROR",
         "warning": "WARNING",
         "info": "INFO",
@@ -271,9 +268,6 @@ TRANSLATIONS = {
 
         # Common
         "press_enter": "Нажмите Enter для продолжения...",
-        "enter_choice": "Введите ваш выбор: ",
-        "invalid_choice": "Неверный выбор. Введите число от 1 до {max}",
-        "invalid_input": "Неверный ввод. Введите число.",
         "error": "ОШИБКА",
         "warning": "ПРЕДУПРЕЖДЕНИЕ",
         "info": "ИНФОРМАЦИЯ",

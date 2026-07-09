@@ -100,7 +100,7 @@ MIN_FREE_SPACE = 600 * 1024 * 1024
 # ==================== APPLICATION SETTINGS ====================
 
 # Application version
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 # Enable verbose console output (info messages, progress, etc.)
 # Set to False to minimize console output
@@ -109,10 +109,6 @@ VERBOSE_LOGS = True
 # Completely disable all console output (print_*, etc.)
 # Used by OLED and Web applications
 SILENT_CONSOLE = False
-
-# Use interactive menu with arrow keys (requires curses support)
-# Set to False for classic numbered menu
-INTERACTIVE_MENU = True
 
 # ==================== ADVANCED SETTINGS ====================
 

@@ -195,8 +195,6 @@ def confirm_action(prompt: str, require_yes: bool = False, max_attempts: int = 5
     Returns:
         True if confirmed, False otherwise
     """
-    import config
-
     # For critical actions, show warning
     if require_yes:
         print()
@@ -205,50 +203,11 @@ def confirm_action(prompt: str, require_yes: bool = False, max_attempts: int = 5
     print_info(prompt)
     print()
 
-    for attempt in range(1, max_attempts + 1):
-        # Use interactive menu if enabled
-        if config.INTERACTIVE_MENU and CURSES_AVAILABLE:
-            try:
-                choice = show_menu(
-                    "Confirm Action",
-                    ["✓ YES - Proceed with operation", "✗ NO - Cancel operation"]
-                )
-
-                if choice == 1:
-                    return True
-                elif choice == 2:
-                    return False
-                else:
-                    # Choice 0 = cancel/escape
-                    return False
-
-            except Exception:
-                # Fallback to text input on error
-                pass
-
-        # Fallback: classic text input
-        if require_yes:
-            response = input(f"Type 'yes' to confirm (attempt {attempt}/{max_attempts}): ").strip().lower()
-            if response == "yes":
-                return True
-            elif response in ['no', 'n', 'cancel']:
-                return False
-            # Invalid input - try again
-            print_warning(f"Invalid input. Please type 'yes' to confirm or 'no' to cancel.")
-        else:
-            response = input(f"Confirm (y/n, attempt {attempt}/{max_attempts}): ").strip().lower()
-            if response in ['y', 'yes']:
-                return True
-            elif response in ['n', 'no']:
-                return False
-            # Invalid input - try again
-            print_warning(f"Invalid input. Please type 'y' for yes or 'n' for no.")
-
-        print()
-
-    # Max attempts reached
-    print_error(f"Maximum attempts ({max_attempts}) reached. Operation cancelled.")
-    return False
+    choice = show_menu(
+        "Confirm Action",
+        ["✓ YES - Proceed with operation", "✗ NO - Cancel operation"]
+    )
+    return choice == 1
 
 
 def wait_with_spinner(seconds: int, message: str = "Please wait"):
@@ -573,49 +532,19 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
 
 def show_menu(title: str, options: List[str]) -> int:
     """
-    Display menu and get user choice
-    Uses interactive curses menu if enabled and available, otherwise falls back to numbered menu
+    Display an arrow-key menu (curses) and return the choice.
 
     Args:
         title: Menu title
         options: List of menu options
 
     Returns:
-        Selected option number (1-based), or 0 for invalid
+        Selected option number (1-based), or 0 if cancelled.
     """
-    # Try interactive menu if enabled
-    if config.INTERACTIVE_MENU and CURSES_AVAILABLE:
-        try:
-            choice = curses.wrapper(show_menu_interactive_curses, title, options)
-            if choice > 0:
-                return choice
-            # If cancelled (choice == 0), fall through to classic menu
-        except Exception as e:
-            # If curses fails, fall back to classic menu
-            print_error(f"Interactive menu failed: {e}, falling back to classic menu")
-            pass  # Continue to classic menu
-
-    # Classic numbered menu (fallback)
-    print_header(title)
-
-    for idx, option in enumerate(options, 1):
-        print(f"  {idx}. {option}")
-
-    print()
-
     try:
-        choice = input("Enter your choice: ").strip()
-        choice_num = int(choice)
-        if 1 <= choice_num <= len(options):
-            return choice_num
-        else:
-            print_error(f"Invalid choice. Please enter 1-{len(options)}")
-            return 0
-    except ValueError:
-        print_error("Invalid input. Please enter a number.")
-        return 0
-    except KeyboardInterrupt:
-        print("\n")
+        return curses.wrapper(show_menu_interactive_curses, title, options)
+    except Exception as e:
+        print_error(f"Menu error: {e}")
         return 0
 
 
@@ -813,49 +742,19 @@ def input_dialog_curses(stdscr, title: str, prompt: str, password: bool = False)
 
 def show_horizontal_menu(title: str, options: List[str]) -> int:
     """
-    Display horizontal menu (for simple choices like Yes/No, OK/Cancel)
-    Uses interactive curses menu if enabled and available, otherwise falls back to numbered menu
+    Display a horizontal arrow-key menu (curses) for simple choices (Yes/No, OK/Cancel).
 
     Args:
         title: Menu title/question
-        options: List of menu options (will be displayed horizontally)
+        options: List of menu options (displayed horizontally)
 
     Returns:
-        Selected option number (1-based), or 0 for invalid
+        Selected option number (1-based), or 0 if cancelled.
     """
-    # Try interactive horizontal menu if enabled
-    if config.INTERACTIVE_MENU and CURSES_AVAILABLE:
-        try:
-            choice = curses.wrapper(show_menu_horizontal_curses, title, options)
-            if choice > 0:
-                return choice
-            # If cancelled, fall through to classic menu
-        except Exception as e:
-            # If curses fails, fall back to classic menu
-            print_error(f"Interactive menu failed: {e}, falling back to classic menu")
-            pass
-
-    # Classic numbered menu (fallback)
-    print_header(title)
-
-    for idx, option in enumerate(options, 1):
-        print(f"  {idx}. {option}")
-
-    print()
-
     try:
-        choice = input("Enter your choice: ").strip()
-        choice_num = int(choice)
-        if 1 <= choice_num <= len(options):
-            return choice_num
-        else:
-            print_error(f"Invalid choice. Please enter 1-{len(options)}")
-            return 0
-    except ValueError:
-        print_error("Invalid input. Please enter a number.")
-        return 0
-    except KeyboardInterrupt:
-        print("\n")
+        return curses.wrapper(show_menu_horizontal_curses, title, options)
+    except Exception as e:
+        print_error(f"Menu error: {e}")
         return 0
 
 
@@ -871,33 +770,98 @@ def input_dialog(title: str, prompt: str, password: bool = False) -> Optional[st
     Returns:
         User input string or None if cancelled
     """
-    # Try interactive dialog if enabled
-    if config.INTERACTIVE_MENU and CURSES_AVAILABLE:
-        try:
-            result = curses.wrapper(input_dialog_curses, title, prompt, password)
-            return result
-        except Exception as e:
-            # If curses fails, fall back to simple input
-            print_error(f"Interactive dialog failed: {e}, falling back to simple input")
-            pass
-
-    # Fallback to simple input
-    print_header(title)
-    print_info(prompt)
-    print()
-
     try:
-        if password:
-            import getpass
-            user_input = getpass.getpass("Password: ")
+        return curses.wrapper(input_dialog_curses, title, prompt, password)
+    except Exception as e:
+        print_error(f"Input dialog error: {e}")
+        return None
+
+
+def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
+    """Scrollable read-only text screen. Enter/Esc/q closes it."""
+    curses.curs_set(0)
+    if curses.has_colors():
+        curses.start_color()
+        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)    # title
+        curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # hint
+
+    top = 0
+    while True:
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
+
+        # Centered single-line title box
+        label = f"  {title.upper()}  "
+        tw = len(label)
+        sx = max(0, (w - tw - 2) // 2)
+        if curses.has_colors():
+            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
+        try:
+            stdscr.addstr(0, sx, "╔" + "═" * tw + "╗")
+            stdscr.addstr(1, sx, "║" + label + "║")
+            stdscr.addstr(2, sx, "╚" + "═" * tw + "╝")
+        except curses.error:
+            pass
+        if curses.has_colors():
+            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+
+        body_top = 4
+        body_h = max(1, h - body_top - 1)   # keep the last line for the hint
+        max_top = max(0, len(lines) - body_h)
+        top = min(max(0, top), max_top)
+
+        for i in range(body_h):
+            li = top + i
+            if li >= len(lines):
+                break
+            try:
+                stdscr.addstr(body_top + i, 2, lines[li][:max(0, w - 3)])
+            except curses.error:
+                pass
+
+        if len(lines) > body_h:
+            hint = "  ↑↓ PgUp/PgDn scroll    Enter/Esc/q — back"
         else:
-            user_input = input(f"{prompt}: ").strip()
-        return user_input if user_input else None
-    except KeyboardInterrupt:
-        print("\n")
-        return None
-    except EOFError:
-        return None
+            hint = "  Enter/Esc/q — back"
+        if curses.has_colors():
+            stdscr.attron(curses.color_pair(4))
+        try:
+            stdscr.addstr(h - 1, 0, hint[:max(0, w - 1)])
+        except curses.error:
+            pass
+        if curses.has_colors():
+            stdscr.attroff(curses.color_pair(4))
+
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (ord('\n'), ord('\r'), 27, ord('q'), ord('Q')):
+            return
+        elif key == curses.KEY_UP:
+            top -= 1
+        elif key == curses.KEY_DOWN:
+            top += 1
+        elif key == curses.KEY_NPAGE:
+            top += body_h
+        elif key == curses.KEY_PPAGE:
+            top -= body_h
+        elif key == curses.KEY_HOME:
+            top = 0
+        elif key == curses.KEY_END:
+            top = max_top
+
+
+def show_text_screen(title: str, lines: List[str]) -> None:
+    """Show a scrollable read-only text screen (curses)."""
+    try:
+        curses.wrapper(show_text_screen_curses, title, lines)
+    except Exception as e:
+        # Last-resort plain output so information is never lost.
+        print_error(f"Screen error: {e}")
+        print_header(title)
+        for ln in lines:
+            print(ln)
+        press_enter_to_continue()
 
 
 def press_enter_to_continue():

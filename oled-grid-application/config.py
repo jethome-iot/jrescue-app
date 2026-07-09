@@ -53,7 +53,6 @@ DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
 
 # Advanced settings
 SKIP_MOUNT_CHECK = False  # Only True for testing on a non-recovery host
-INTERACTIVE_MENU = False  # OLED uses custom menu, not curses
 SILENT_CONSOLE = True  # Disable all console output (logs only to file)
 VERBOSE_LOGS = False  # Disable verbose logging
 
@@ -68,7 +67,6 @@ TEST_MODE_NO_BUTTONS = False  # Set to True for testing without gpio-keys
 
 # ==================== APPLICATION SETTINGS ====================
 
-# Application name
+# Application name (version comes from core config — single source of truth)
 APP_NAME = "Rescue"
-APP_VERSION = "1.3.0-OLED"
 
