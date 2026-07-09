@@ -172,7 +172,32 @@ class FlashHandler:
         print_success("Ready to flash")
         return True
 
-    def flash_image(self, image_path: str, verify: bool = False, skip_confirmation: bool = False) -> bool:
+    def confirm_flash(self, image_path: str) -> bool:
+        """Curses confirmation screen for flashing image_path to this device."""
+        from utils import show_confirm_screen
+
+        is_compressed = image_path.endswith('.xz')
+        image_size = os.path.getsize(image_path)
+        compressed_label = f" ({t('compressed')})" if is_compressed else ""
+        return show_confirm_screen(
+            t("confirm_flash_operation"),
+            [
+                f"{t('image_to_flash')}:",
+                f"  {os.path.basename(image_path)}",
+                f"  {t('size')}: {format_bytes(image_size)}{compressed_label}",
+                "",
+                f"{t('target_device')}:",
+                f"  {self.emmc_device}",
+                "",
+                f"⚠️  {t('all_data_erased', device=self.emmc_device)}",
+                f"⚠️  {t('cannot_be_undone')}",
+            ],
+            yes_label=t("flash"),
+            no_label=t("cancel"),
+        )
+
+    def flash_image(self, image_path: str, verify: bool = False, skip_confirmation: bool = False,
+                    progress_cb=None) -> bool:
         """
         Flash image to eMMC device
 
@@ -201,49 +226,8 @@ class FlashHandler:
 
         # Require explicit confirmation (skip for OLED/GUI apps)
         if not skip_confirmation:
-            # Show detailed confirmation with horizontal menu
-            from utils import show_horizontal_menu
-
-            print()
-            # Format confirmation message
-            size_label = t("size")
-            compressed_label = f" ({t('compressed')})" if is_compressed else ""
-            size_info = f"  {size_label}: {format_bytes(image_size)}{compressed_label}"
-            image_label = t("image_to_flash")
-            target_label = t("target_device")
-            warning_label = "⚠️  WARNING:"
-            erased_msg = t("all_data_erased", device=self.emmc_device)
-            cannot_undo = t("cannot_be_undone")
-            title = t("confirm_flash_operation")
-
-            confirmation_text = f"""╔═══════════════════════════════════════════════╗
-║     {title:<41} ║
-╠═══════════════════════════════════════════════╣
-║                                               ║
-║ {image_label}:                               ║
-║   {image_filename:<43} ║
-║ {size_info:<45} ║
-║                                               ║
-║ {target_label}:                                ║
-║   {self.emmc_device:<43} ║
-║                                               ║
-║ {warning_label:<45} ║
-║   {erased_msg:<43} ║
-║   {cannot_undo:<43} ║
-║                                               ║
-╚═══════════════════════════════════════════════╝"""
-            print(confirmation_text)
-
-            choice = show_horizontal_menu(
-                t("proceed_with_flashing"),
-                [t("cancel"), t("flash")]
-            )
-
-            if choice != 2:  # Not "Flash" (Flash is option 2)
-                print_info(t("download_cancelled"))
+            if not self.confirm_flash(image_path):
                 return False
-
-        print()
 
         # Unmount any mounted partitions
         if not self.unmount_partitions(skip_confirmation=skip_confirmation):
@@ -281,9 +265,9 @@ class FlashHandler:
 
         try:
             if is_compressed:
-                success = self._flash_compressed(image_path)
+                success = self._flash_compressed(image_path, progress_cb=progress_cb)
             else:
-                success = self._flash_uncompressed(image_path)
+                success = self._flash_uncompressed(image_path, progress_cb=progress_cb)
 
             if not success:
                 return False
@@ -315,8 +299,72 @@ class FlashHandler:
             print_error(f"Flash operation failed: {e}")
             return False
 
-    def _flash_compressed(self, image_path: str) -> bool:
+    def _flash_pipeline_cb(self, image_path: str, compressed: bool, progress_cb) -> bool:
+        """Flash via pv|{xz|}dd reporting numeric progress to progress_cb.
+
+        Uses `pv -n` (one integer percent per stderr line, based on the input
+        file size — for .xz that is compressed-bytes progress, same as the
+        interactive pipeline shows).
+        """
+        size = os.path.getsize(image_path)
+        name = os.path.basename(image_path)
+
+        pv_cmd = ['pv', '-n', '-i', '0.5', '-s', str(size), image_path]
+        dd_cmd = [
+            'dd',
+            f'of={self.emmc_device}',
+            f'bs={config.DD_BLOCK_SIZE}M',
+            'conv=fsync',
+            'status=none'
+        ] + self._dd_offset_args()
+
+        try:
+            pv_p = subprocess.Popen(pv_cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+            if compressed:
+                xz_p = subprocess.Popen(['xz', '-dc'], stdin=pv_p.stdout,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL)
+                pv_p.stdout.close()
+                dd_in = xz_p.stdout
+            else:
+                xz_p = None
+                dd_in = pv_p.stdout
+
+            dd_p = subprocess.Popen(dd_cmd, stdin=dd_in,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+            dd_in.close()
+
+            progress_cb(0, name, self.emmc_device)
+            for line in pv_p.stderr:
+                try:
+                    progress_cb(int(line.strip()), name, self.emmc_device)
+                except ValueError:
+                    pass  # non-numeric pv noise
+
+            dd_rc = dd_p.wait()
+            xz_rc = xz_p.wait() if xz_p else 0
+            pv_p.wait()
+
+            if dd_rc != 0:
+                print_error(f"dd command failed with code {dd_rc}")
+                return False
+            if xz_rc != 0:
+                print_error(f"xz command failed with code {xz_rc}")
+                return False
+            progress_cb(100, name, self.emmc_device)
+            return True
+
+        except Exception as e:
+            print_error(f"Flash failed: {e}")
+            return False
+
+    def _flash_compressed(self, image_path: str, progress_cb=None) -> bool:
         """Flash compressed (.xz) image using decompression on the fly"""
+        if progress_cb:
+            return self._flash_pipeline_cb(image_path, compressed=True,
+                                           progress_cb=progress_cb)
         print_info("Decompressing and flashing (this will take several minutes)...")
         print_info("Using STREAMING decompression - image is NOT loaded into RAM")
         print()
@@ -602,8 +650,11 @@ class FlashHandler:
             print_error(f"Flash failed: {e}")
             return False
 
-    def _flash_uncompressed(self, image_path: str) -> bool:
+    def _flash_uncompressed(self, image_path: str, progress_cb=None) -> bool:
         """Flash uncompressed image using dd"""
+        if progress_cb:
+            return self._flash_pipeline_cb(image_path, compressed=False,
+                                           progress_cb=progress_cb)
         print_info("Flashing image (this will take several minutes)...")
         print()
 
@@ -738,15 +789,17 @@ def select_target_device() -> Optional[str]:
     Returns:
         Device path (e.g., '/dev/mmcblk1') or None
     """
-    from utils import find_mmcblk_devices, show_menu
+    from utils import find_mmcblk_devices, show_menu, show_text_screen
 
     devices = find_mmcblk_devices()
 
     if not devices:
-        print_error("No mmcblk devices found")
-        print_info("Please check that eMMC/SD devices are connected")
-        print_info("Run 'lsblk' to see available devices")
-        return config.EMMC_DEVICE  # Fallback to config default
+        show_text_screen("Select Target Device", [
+            "No mmcblk devices found.",
+            "Please check that eMMC/SD devices are connected",
+            "(run 'lsblk' to see available devices).",
+        ])
+        return None
 
     # Build menu options
     options = []

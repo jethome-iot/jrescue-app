@@ -151,7 +151,6 @@ class NetworkManagerHandler(NetworkHandler):
         self._eth_devices: List[str] = []
         if self.available:
             self._enumerate_devices()
-            print_info("NetworkManager (nmcli) detected")
 
     def _enumerate_devices(self) -> None:
         """Discover Wi-Fi and Ethernet devices instead of assuming wlan0/eth0."""
@@ -345,7 +344,6 @@ def get_network_handler() -> Optional[NetworkHandler]:
     """
     handler = NetworkManagerHandler()
     if handler.available:
-        print_success("Using NetworkManager (nmcli)")
         return handler
 
     print_error("NetworkManager (nmcli) not found!")

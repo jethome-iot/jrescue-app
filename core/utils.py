@@ -864,6 +864,215 @@ def show_text_screen(title: str, lines: List[str]) -> None:
         press_enter_to_continue()
 
 
+def _draw_title_box(stdscr, title: str) -> None:
+    """Draw the standard centered single-line title box on rows 0-2."""
+    h, w = stdscr.getmaxyx()
+    label = f"  {title.upper()}  "
+    tw = len(label)
+    sx = max(0, (w - tw - 2) // 2)
+    if curses.has_colors():
+        stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
+    try:
+        stdscr.addstr(0, sx, "╔" + "═" * tw + "╗")
+        stdscr.addstr(1, sx, "║" + label + "║")
+        stdscr.addstr(2, sx, "╚" + "═" * tw + "╝")
+    except curses.error:
+        pass
+    if curses.has_colors():
+        stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+
+
+def show_wait_screen(title: str, message: str, fn, *args, **kwargs):
+    """
+    Run a blocking function while showing a curses spinner screen.
+
+    stdout/stderr of fn are captured so core print_* output cannot corrupt
+    the curses display.
+
+    Returns:
+        (result, captured_text). If fn raised, result is the exception object.
+    """
+    import io
+    import threading
+    import contextlib
+
+    state = {'result': None, 'done': False}
+    buf = io.StringIO()
+
+    def runner():
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                state['result'] = fn(*args, **kwargs)
+        except Exception as e:  # surfaced to the caller, never swallowed
+            state['result'] = e
+        finally:
+            state['done'] = True
+
+    def ui(stdscr):
+        curses.curs_set(0)
+        if curses.has_colors():
+            curses.start_color()
+            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        stdscr.nodelay(True)
+        spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        i = 0
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        while not state['done']:
+            stdscr.erase()
+            h, w = stdscr.getmaxyx()
+            _draw_title_box(stdscr, title)
+            try:
+                stdscr.addstr(h // 2, max(0, (w - len(message) - 2) // 2),
+                              f"{spinner[i % len(spinner)]} {message}"[:w - 1])
+            except curses.error:
+                pass
+            stdscr.refresh()
+            i += 1
+            curses.napms(100)
+        thread.join()
+
+    try:
+        curses.wrapper(ui)
+    except Exception:
+        # curses failed — run plainly so the operation still happens
+        if not state['done']:
+            runner()
+    return state['result'], buf.getvalue()
+
+
+def show_progress_screen(title: str, worker) -> tuple:
+    """
+    Run worker(progress) in a thread while drawing a curses progress screen.
+
+    worker receives `progress(percent, *lines)`: percent is 0-100 or None
+    (indeterminate), lines are short status strings shown under the bar.
+    stdout/stderr of the worker are captured.
+
+    Returns:
+        (result, captured_text). If worker raised, result is the exception.
+    """
+    import io
+    import threading
+    import contextlib
+
+    state = {'percent': None, 'lines': (), 'done': False, 'result': None}
+    buf = io.StringIO()
+
+    def progress(percent, *lines):
+        state['percent'] = percent
+        state['lines'] = lines
+
+    def runner():
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                state['result'] = worker(progress)
+        except Exception as e:
+            state['result'] = e
+        finally:
+            state['done'] = True
+
+    def ui(stdscr):
+        curses.curs_set(0)
+        if curses.has_colors():
+            curses.start_color()
+            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+            curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)
+        stdscr.nodelay(True)
+        spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        i = 0
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        while not state['done']:
+            stdscr.erase()
+            h, w = stdscr.getmaxyx()
+            _draw_title_box(stdscr, title)
+            y = h // 2 - 1
+            pct = state['percent']
+            bar_w = max(10, min(50, w - 14))
+            try:
+                if pct is None:
+                    stdscr.addstr(y, max(0, (w - 12) // 2),
+                                  f"{spinner[i % len(spinner)]} working...")
+                else:
+                    filled = int(bar_w * min(100, max(0, pct)) / 100)
+                    bar = "█" * filled + "░" * (bar_w - filled)
+                    line = f"[{bar}] {pct:3.0f}%"
+                    stdscr.addstr(y, max(0, (w - len(line)) // 2), line[:w - 1])
+                for j, ln in enumerate(state['lines'][:3]):
+                    stdscr.addstr(y + 2 + j, max(0, (w - len(ln)) // 2), str(ln)[:w - 1])
+            except curses.error:
+                pass
+            stdscr.refresh()
+            i += 1
+            curses.napms(100)
+        thread.join()
+
+    try:
+        curses.wrapper(ui)
+    except Exception:
+        if not state['done']:
+            runner()
+    return state['result'], buf.getvalue()
+
+
+def show_confirm_screen(title: str, lines: List[str], yes_label: str = "YES",
+                        no_label: str = "NO") -> bool:
+    """
+    Curses confirmation screen: info lines + horizontal NO/YES buttons.
+    NO is preselected. Esc/q = NO. Returns True only on explicit YES.
+    """
+    def ui(stdscr):
+        curses.curs_set(0)
+        if curses.has_colors():
+            curses.start_color()
+            curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)
+            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        current = 0  # 0 = NO (safe default), 1 = YES
+        while True:
+            stdscr.erase()
+            h, w = stdscr.getmaxyx()
+            _draw_title_box(stdscr, title)
+            y = 4
+            for ln in lines:
+                if y >= h - 4:
+                    break
+                try:
+                    stdscr.addstr(y, 2, str(ln)[:max(0, w - 3)])
+                except curses.error:
+                    pass
+                y += 1
+            labels = [f"  {no_label}  ", f"  {yes_label}  "]
+            total = len(labels[0]) + len(labels[1]) + 6
+            x = max(0, (w - total) // 2)
+            by = min(h - 2, y + 2)
+            for idx, lab in enumerate(labels):
+                try:
+                    if idx == current and curses.has_colors():
+                        stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                        stdscr.addstr(by, x, lab)
+                        stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                    else:
+                        stdscr.addstr(by, x, lab)
+                except curses.error:
+                    pass
+                x += len(lab) + 6
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key in (curses.KEY_LEFT, curses.KEY_RIGHT, ord('\t')):
+                current = 1 - current
+            elif key in (ord('\n'), ord('\r')):
+                return current == 1
+            elif key in (27, ord('q'), ord('Q')):
+                return False
+
+    try:
+        return bool(curses.wrapper(ui))
+    except Exception as e:
+        print_error(f"Screen error: {e}")
+        return False
+
+
 def press_enter_to_continue():
     """Wait for user to press Enter"""
     try:

@@ -12,7 +12,7 @@ from typing import Optional, List
 import config
 from utils import (
     ensure_directory, print_error, print_success, print_info, print_warning,
-    format_bytes, format_speed, format_time, show_menu, show_horizontal_menu, clear_screen
+    format_bytes, format_speed, format_time, show_menu, show_horizontal_menu
 )
 
 
@@ -126,7 +126,8 @@ class DownloadHandler:
             print_error(f"JetHome API error: {e}")
             return None
 
-    def download_file(self, filename_or_url: str, dest_dir: str = None, resume: bool = True, dest_filename: str = None) -> Optional[str]:
+    def download_file(self, filename_or_url: str, dest_dir: str = None, resume: bool = True,
+                      dest_filename: str = None, progress_cb=None) -> Optional[str]:
         """
         Download a file from the server with progress tracking
 
@@ -135,6 +136,8 @@ class DownloadHandler:
             dest_dir: Destination directory (default: config.TEMP_DIR)
             resume: Allow resuming interrupted downloads
             dest_filename: Override destination filename
+            progress_cb: Optional callable(percent_or_None, *status_lines);
+                         when given, progress goes to it instead of stdout
 
         Returns:
             Path to downloaded file or None if failed
@@ -237,8 +240,24 @@ class DownloadHandler:
                         if elapsed > 0:
                             speed = (downloaded - start_byte) / elapsed
 
-                            # Build progress display
-                            if total_size:
+                            # Calculate ETA
+                            eta_str = ""
+                            if total_size and speed > 0:
+                                remaining_bytes = total_size - downloaded
+                                eta_seconds = int(remaining_bytes / speed)
+                                eta_str = f"ETA: {format_time(eta_seconds)}"
+
+                            if progress_cb:
+                                if total_size:
+                                    progress_cb(
+                                        downloaded * 100 / total_size,
+                                        f"{format_bytes(downloaded)} / {format_bytes(total_size)}",
+                                        f"{format_speed(speed)}  {eta_str}".strip()
+                                    )
+                                else:
+                                    progress_cb(None, f"{format_bytes(downloaded)}",
+                                                format_speed(speed))
+                            elif total_size:
                                 percent = (downloaded * 100) // total_size
 
                                 # Visual progress bar (50 chars wide)
@@ -246,15 +265,8 @@ class DownloadHandler:
                                 filled = int(bar_width * downloaded // total_size)
                                 bar = '█' * filled + '░' * (bar_width - filled)
 
-                                # Calculate ETA
-                                eta_str = ""
-                                if speed > 0:
-                                    remaining_bytes = total_size - downloaded
-                                    eta_seconds = int(remaining_bytes / speed)
-                                    eta_str = f" | ETA: {format_time(eta_seconds)}"
-
-                                # Print progress with bar
-                                print(f"\r[{bar}] {percent}% | {format_bytes(downloaded)}/{format_bytes(total_size)} | {format_speed(speed)}{eta_str}", end='', flush=True)
+                                sep_eta = f" | {eta_str}" if eta_str else ""
+                                print(f"\r[{bar}] {percent}% | {format_bytes(downloaded)}/{format_bytes(total_size)} | {format_speed(speed)}{sep_eta}", end='', flush=True)
                             else:
                                 # No total size - show only downloaded and speed
                                 print(f"\rDownloading: {format_bytes(downloaded)} | {format_speed(speed)}", end='', flush=True)
@@ -318,18 +330,21 @@ class DownloadHandler:
 
 def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
     """
-    Interactive function to select an image to download
-    Uses arrow keys navigation (like Midnight Commander)
+    Interactive (curses-only) image selection.
 
     Returns:
         Selected image dict or None
     """
-    images = handler.list_available_images()
+    from utils import show_wait_screen, show_text_screen
 
-    if not images:
-        clear_screen()
-        print_error("No images available")
-        print_info("Failed to fetch the image list from the JetHome API")
+    images, _ = show_wait_screen("Download", "Fetching image list...",
+                                 handler.list_available_images)
+    if isinstance(images, Exception) or not images:
+        show_text_screen("Download", [
+            "No images available.",
+            "Failed to fetch the image list from the JetHome API.",
+            "Check the network connection and try again.",
+        ])
         return None
 
     # Build menu options
@@ -355,12 +370,7 @@ def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
         menu_line = f"{name} | {size_str}"
         menu_options.append(menu_line)
 
-    # Show interactive menu
-    print_info(f"Found {len(images)} firmware image(s)")
-    print_info("Use ↑↓ arrow keys to navigate, Enter to select")
-    print()
-
-    choice = show_menu("Select Image to Download", menu_options)
+    choice = show_menu(f"Select Image to Download ({len(images)})", menu_options)
 
     # choice == 0 means cancelled or error
     # choice == 1 means "Back/Cancel" was selected
@@ -378,11 +388,13 @@ def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
 
 def download_image_interactive() -> Optional[str]:
     """
-    Interactive function to download an image
+    Interactive (curses-only) image download.
 
     Returns:
         Path to downloaded file or None
     """
+    from utils import show_progress_screen, show_text_screen
+
     handler = DownloadHandler()
 
     # Select image
@@ -390,29 +402,26 @@ def download_image_interactive() -> Optional[str]:
     if not image:
         return None
 
-    print()
-    print_info(f"Selected: {image['name']}")
-    print_info(f"Filename: {image['filename']}")
-
-    # Show size if available
-    if 'size' in image and image['size'] > 0:
-        from utils import format_bytes
-        print_info(f"Size: {format_bytes(image['size'])}")
-
-    print()
-
-    # Confirm download with horizontal interactive menu
+    size_str = format_bytes(image['size']) if image.get('size') else "unknown size"
     confirm_choice = show_horizontal_menu(
-        "Proceed with download?",
+        f"Download {image['filename']} ({size_str})?",
         ["Cancel", "Download"]
     )
 
     if confirm_choice != 2:
-        print_info("Download cancelled")
         return None
 
-    print()
-
     # Download from the JetHome API (always a full URL)
-    return handler.download_file(image['url'], dest_filename=image['filename'])
+    def worker(progress):
+        progress(None, image['filename'])
+        return handler.download_file(image['url'], dest_filename=image['filename'],
+                                     progress_cb=progress)
+
+    result, output = show_progress_screen("Downloading", worker)
+
+    if isinstance(result, Exception) or not result:
+        tail = [ln for ln in output.strip().splitlines() if ln.strip()][-6:]
+        show_text_screen("Download failed", tail or ["Download failed."])
+        return None
+    return result
 

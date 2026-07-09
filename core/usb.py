@@ -244,28 +244,23 @@ def list_usb_devices_interactive() -> Optional[dict]:
     Returns:
         Selected device dict or None
     """
+    from utils import show_text_screen
+
     handler = USBHandler()
 
     devices = handler.detect_usb_devices()
 
     if not devices:
-        print_warning(f"No USB devices mounted at {handler.mount_point}")
-        print_info("Please insert USB drive and ensure it's mounted to /mnt/usb")
-        print()
-        print_info("No USB device found")
+        show_text_screen("USB", [
+            "No USB devices found.",
+            "Please insert a USB drive and try again.",
+        ])
         return None
 
     if len(devices) == 1:
-        device = devices[0]
-        vendor_model = f"{device['vendor']} {device['model']}".strip()
-        print_info(f"Found: {device['device']} ({device['size']}) {vendor_model}")
-        return device
+        return devices[0]
     else:
         # Multiple devices - show interactive menu
-        print_info(f"Found {len(devices)} USB device(s)")
-        print_info("Use ↑↓ arrow keys to navigate, Enter to select")
-        print()
-
         # Build menu options
         menu_options = []
         menu_options.append("← Back / Cancel")

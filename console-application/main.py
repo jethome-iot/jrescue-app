@@ -2,8 +2,9 @@
 """
 Rescue Console Application - Main Entry Point
 
-Interactive console application for Linux rescue systems to flash eMMC with images.
-Supports downloading images via HTTP or loading from USB, with WiFi/Ethernet configuration.
+Curses-only console application for Linux rescue systems to flash eMMC with
+images. Supports downloading images via the JetHome API or loading from USB,
+with WiFi/Ethernet configuration through NetworkManager.
 """
 
 import sys
@@ -19,34 +20,21 @@ import config
 import translations as app_locale
 from translations import t
 from utils import (
-    require_root, clear_screen, print_header, print_info, print_success,
-    print_error, print_warning, show_menu, show_horizontal_menu, input_dialog, press_enter_to_continue, get_system_info,
-    format_bytes, check_disk_space, ensure_directory,
-    check_web_app_status, get_local_ip, create_clickable_link
+    require_root, clear_screen, print_info, print_error,
+    show_menu, show_horizontal_menu, input_dialog,
+    show_text_screen, show_wait_screen, show_progress_screen, show_confirm_screen,
+    get_system_info, format_bytes, check_disk_space, ensure_directory,
+    check_web_app_status, get_local_ip
 )
 from network import get_network_handler
 from download import download_image_interactive
 from usb import list_usb_devices_interactive, USBHandler
 
 
-def show_banner():
-    """Display application banner"""
-    title = t("app_title")
-    subtitle = t("app_subtitle")
-    device_line = f"{t('device')}: {config.JETHOME_DEVICE_NAME}"
-
-    banner = f"""
-╔═══════════════════════════════════════════════════════════════════════╗
-║                                                                       ║
-║                    {title:<55}║
-║                           Version {config.APP_VERSION}                            ║
-║                                                                       ║
-║              {subtitle:<55}║
-║                     {device_line:<46}║
-║                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════╝
-"""
-    print(banner)
+def _output_lines(captured: str, limit: int = 40) -> list:
+    """Turn captured stdout text into display lines for show_text_screen."""
+    lines = [ln.rstrip() for ln in captured.splitlines() if ln.strip()]
+    return lines[-limit:]
 
 
 def network_setup_menu():
@@ -54,27 +42,22 @@ def network_setup_menu():
     network_handler = get_network_handler()
 
     if not network_handler:
-        print_error("NetworkManager not available")
-        print_warning("nmcli was not found — the recovery image must ship NetworkManager")
-        press_enter_to_continue()
+        show_text_screen("Network", [
+            "NetworkManager not available.",
+            "nmcli was not found — the recovery image must ship NetworkManager.",
+        ])
         return
 
     while True:
-        clear_screen()
-        print_header("NETWORK SETUP")
-
-        # Show current status
+        # Current status goes into the curses menu title — there are no
+        # plain-text interstitial screens in the console UI.
         status = network_handler.get_connection_status()
         if status['connected']:
-            print_success(f"Connected: {status['interface']}")
-            if status['ip']:
-                print_info(f"IP Address: {status['ip']}")
+            status_line = status['ip'] or status['interface'] or "connected"
             if status['ssid']:
-                print_info(f"WiFi Network: {status['ssid']}")
+                status_line = f"{status['ssid']} {status_line}"
         else:
-            print_info("Status: Not connected")
-
-        print()
+            status_line = "not connected"
 
         options = [
             t("back_to_main"),
@@ -82,7 +65,7 @@ def network_setup_menu():
             t("test_connection")
         ]
 
-        choice = show_menu(t("network_options"), options)
+        choice = show_menu(f'{t("network_options")} · {status_line}', options)
 
         if choice == 0 or choice == 1:
             # Cancelled or Back
@@ -94,461 +77,290 @@ def network_setup_menu():
 
         elif choice == 3:
             # Test connectivity
-            print()
-            network_handler.test_connectivity()
-            press_enter_to_continue()
+            _, out = show_wait_screen(
+                t("test_connection"), "Testing connection...",
+                network_handler.test_connectivity
+            )
+            show_text_screen(t("test_connection"),
+                             _output_lines(out) or ["No output"])
 
 
 def wifi_setup(network_handler):
-    """WiFi configuration"""
-    clear_screen()
-    print_header("WiFi SETUP")
+    """WiFi configuration (scan, pick, password, connect) — all curses."""
+    networks, out = show_wait_screen("WiFi", "Scanning for networks...",
+                                     network_handler.scan_wifi)
 
-    # Scan for networks
-    networks = network_handler.scan_wifi()
-
-    if not networks:
-        print_error("No WiFi networks found")
-        print_info("Make sure WiFi adapter is enabled")
-        press_enter_to_continue()
+    if isinstance(networks, Exception) or not networks:
+        show_text_screen("WiFi", [
+            "No WiFi networks found.",
+            "Make sure the WiFi adapter is enabled.",
+        ] + _output_lines(out, limit=6))
         return
 
-    print()
-    print_success(f"Found {len(networks)} network(s)")
-    print_info("Use ↑↓ arrow keys to navigate, Enter to select")
-    print()
-
     # Build menu options
-    menu_options = []
-    menu_options.append(t("back_cancel"))
-
+    menu_options = [t("back_cancel")]
     for network in networks:
         security_icon = "🔒" if network['security'] != "Open" else "🔓"
         signal_bars = "█" * (int(network['signal']) // 25)
         menu_line = f"{network['ssid']:<30} {security_icon} [{signal_bars:<4}] {network['signal']}%"
         menu_options.append(menu_line)
 
-    choice = show_menu(t("select_network"), menu_options)
+    choice = show_menu(f'{t("select_network")} ({len(networks)})', menu_options)
 
-    # choice == 0 or 1 means cancelled
     if choice == 0 or choice == 1:
         return
 
-    # choice >= 2 means a network was selected
     network_index = choice - 2
-    if 0 <= network_index < len(networks):
-        selected_network = networks[network_index]
-        ssid = selected_network['ssid']
+    if not (0 <= network_index < len(networks)):
+        return
 
-        print()
-        print_info(f"Selected: {ssid}")
+    selected_network = networks[network_index]
+    ssid = selected_network['ssid']
 
-        # Ask for password if secured
-        password = None
-        if selected_network['security'] != "Open":
-            # Use interactive dialog for password input
-            password = input_dialog(
-                f"WiFi Password for {ssid}",
-                "Enter password",
-                password=True
-            )
+    # Ask for password if secured
+    password = None
+    if selected_network['security'] != "Open":
+        password = input_dialog(
+            f"WiFi Password for {ssid}",
+            "Enter password",
+            password=True
+        )
+        if password is None:
+            return  # cancelled
 
-            if password is None:
-                # User cancelled
-                print_info("WiFi setup cancelled")
-                press_enter_to_continue()
-                return
+    result, out = show_wait_screen("WiFi", f"Connecting to {ssid}...",
+                                   network_handler.connect_wifi, ssid, password)
 
-                if not password:
-                    print_error("Password cannot be empty")
-                    press_enter_to_continue()
-                return
-
-        print()
-
-        # Connect
-        if network_handler.connect_wifi(ssid, password):
-            print()
-            print_success("WiFi connection established!")
-
-            # Test connectivity
-            print()
-            network_handler.test_connectivity()
-        else:
-            print()
-            print_error("Failed to connect to WiFi")
-
-        press_enter_to_continue()
+    if result is True:
+        _, test_out = show_wait_screen(t("test_connection"), "Testing connection...",
+                                       network_handler.test_connectivity)
+        show_text_screen("WiFi", [f"✓ Connected to {ssid}", ""]
+                         + _output_lines(test_out))
+    else:
+        show_text_screen("WiFi", [f"✗ Failed to connect to {ssid}", ""]
+                         + _output_lines(out, limit=10))
 
 
-def flash_from_http():
-    """Download image from HTTP and flash it"""
-    clear_screen()
-    print_header("DOWNLOAD & FLASH FROM HTTP")
+def _reboot_prompt():
+    """Post-flash success screen: return to menu or reboot."""
+    reboot_choice = show_horizontal_menu(
+        t("flashing_success"),
+        [t("return_menu"), t("reboot_now")]
+    )
+    if reboot_choice == 2:
+        time.sleep(1)
+        os.system('reboot')
 
-    # Check network connectivity
-    print_info("Checking network connection...")
-    network_handler = get_network_handler()
 
-    if network_handler and not network_handler.test_connectivity():
-        print()
-        print_error("No internet connection")
-        print_info("Please configure network first")
-        press_enter_to_continue()
-        return False
+def flash_to_device(image_path: str, cleanup=None) -> bool:
+    """Select target, confirm, flash with a curses progress screen.
 
-    print()
-
-    # Check disk space
-    free_space = check_disk_space(config.TEMP_DIR)
-
-    if free_space < config.MIN_FREE_SPACE:
-        print_warning(f"Low RAM space: {format_bytes(free_space)} available")
-        print_error(f"Need at least {format_bytes(config.MIN_FREE_SPACE)} for safe operation")
-        press_enter_to_continue()
-        return False
-
-    print()
-
-    # Download image
-    downloaded_image = download_image_interactive()
-
-    if not downloaded_image:
-        print()
-        print_info("Download cancelled or failed")
-        press_enter_to_continue()
-        return False
-
-    print()
-    print_success(f"Image downloaded: {downloaded_image}")
-    print()
-
-    # Select target device
+    cleanup (optional) runs after flashing regardless of outcome (e.g. USB unmount).
+    """
     from flash import FlashHandler, select_target_device
-
-    print_info("Select target device for flashing:")
-    print()
 
     target_device = select_target_device()
     if not target_device:
-        print_info("No device selected")
-        press_enter_to_continue()
+        if cleanup:
+            cleanup()
         return False
 
-    print()
-    print_success(f"Target device: {target_device}")
-    print()
-
-    # Flash the image
     flash_handler = FlashHandler(emmc_device=target_device)
-    success = flash_handler.flash_image(downloaded_image)
 
-    if success:
-        print()
-        # Ask for reboot
-        reboot_choice = show_horizontal_menu(
-            t("flashing_success"),
-            [t("return_menu"), t("reboot_now")]
-        )
-
-        if reboot_choice == 2:
-            print_info("Rebooting...")
-            time.sleep(1)
-            os.system('reboot')
-
-        return True
-    else:
-        print()
-        print_error("Flashing failed")
-        press_enter_to_continue()
+    if not flash_handler.confirm_flash(image_path):
+        if cleanup:
+            cleanup()
         return False
+
+    def worker(progress):
+        progress(None, os.path.basename(image_path), target_device)
+        return flash_handler.flash_image(image_path, skip_confirmation=True,
+                                         progress_cb=progress)
+
+    result, out = show_progress_screen("Flashing eMMC", worker)
+
+    if cleanup:
+        cleanup()
+
+    if result is True:
+        _reboot_prompt()
+        return True
+
+    show_text_screen("Flashing failed",
+                     _output_lines(out, limit=15) or ["Flashing failed."])
+    return False
+
+
+def flash_from_http():
+    """Download image from the JetHome API and flash it"""
+    network_handler = get_network_handler()
+
+    if network_handler:
+        ok, out = show_wait_screen("Download", "Checking network connection...",
+                                   network_handler.test_connectivity)
+        if ok is not True:
+            show_text_screen("Download", [
+                "No internet connection.",
+                "Please configure the network first.",
+            ] + _output_lines(out, limit=8))
+            return False
+
+    # Check RAM space for the compressed image
+    free_space = check_disk_space(config.TEMP_DIR)
+    if free_space < config.MIN_FREE_SPACE:
+        show_text_screen("Download", [
+            f"Low RAM space: {format_bytes(free_space)} available.",
+            f"Need at least {format_bytes(config.MIN_FREE_SPACE)} for safe operation.",
+        ])
+        return False
+
+    downloaded_image = download_image_interactive()
+    if not downloaded_image:
+        return False
+
+    return flash_to_device(downloaded_image)
 
 
 def flash_from_usb():
     """Load image from USB and flash it"""
-    clear_screen()
-    print_header("LOAD & FLASH FROM USB")
-
     usb_handler = USBHandler()
 
-    # Detect USB devices
     device = list_usb_devices_interactive()
-
     if not device:
-        print_info("No USB device selected")
-        press_enter_to_continue()
         return False
 
-    print()
-
-    # Mount device
+    # Mount device (if not already mounted)
     if device['mountpoint']:
-        print_info(f"Device already mounted at {device['mountpoint']}")
         mount_point = device['mountpoint']
     else:
-        if not usb_handler.mount_device(device['device']):
-            print_error("Failed to mount USB device")
-            press_enter_to_continue()
+        ok, out = show_wait_screen("USB", f"Mounting {device['device']}...",
+                                   usb_handler.mount_device, device['device'])
+        if ok is not True:
+            show_text_screen("USB", ["Failed to mount USB device."]
+                             + _output_lines(out, limit=8))
             return False
         mount_point = usb_handler.mount_point
 
-    print()
-
-    # Scan for images
-    images = usb_handler.scan_for_images(mount_point)
-
-    if not images:
-        print_error("No image files found on USB")
-        # Unmount if we mounted it
+    def unmount_if_needed():
         if not device['mountpoint']:
             usb_handler.unmount_device()
-        press_enter_to_continue()
+
+    # Scan for images
+    images, out = show_wait_screen("USB", "Scanning for images...",
+                                   usb_handler.scan_for_images, mount_point)
+    if isinstance(images, Exception) or not images:
+        unmount_if_needed()
+        show_text_screen("USB", ["No image files found on USB."]
+                         + _output_lines(out, limit=8))
         return False
 
-    print()
-    print_info(f"Found {len(images)} image file(s) on USB")
-    print_info("Use ↑↓ arrow keys to navigate, Enter to select")
-    print()
-
     # Build menu options
-    menu_options = []
-    menu_options.append(t("back_cancel"))
-
+    menu_options = [t("back_cancel")]
     for image in images:
         menu_line = f"{image['filename']} | {format_bytes(image['size'])} | {image['relative_path']}"
         menu_options.append(menu_line)
 
-    choice = show_menu(t("select_image_usb"), menu_options)
+    choice = show_menu(f'{t("select_image_usb")} ({len(images)})', menu_options)
 
-    # choice == 0 or 1 means cancelled
     if choice == 0 or choice == 1:
-        if not device['mountpoint']:
-            usb_handler.unmount_device()
+        unmount_if_needed()
         return False
 
-    # choice >= 2 means an image was selected
     image_index = choice - 2
-    if 0 <= image_index < len(images):
-        selected_image = images[image_index]
-
-        print()
-        print_success(f"Selected: {selected_image['filename']}")
-        print_info(f"Path: {selected_image['path']}")
-        print_info(f"Size: {format_bytes(selected_image['size'])}")
-        print_warning("DO NOT REMOVE USB drive until flashing is complete!")
-        print()
-
-        image_to_flash = selected_image['path']
-
-        # Select target device
-        from flash import FlashHandler, select_target_device
-
-        print_info("Select target device for flashing:")
-        print()
-
-        target_device = select_target_device()
-        if not target_device:
-            print_info("No device selected")
-            if not device['mountpoint']:
-                usb_handler.unmount_device()
-            press_enter_to_continue()
-            return False
-
-        print()
-        print_success(f"Target device: {target_device}")
-        print()
-
-        # Flash image
-        flash_handler = FlashHandler(emmc_device=target_device)
-        success = flash_handler.flash_image(image_to_flash)
-
-        # Unmount if we mounted it
-        if not device['mountpoint']:
-            print()
-            usb_handler.unmount_device()
-
-        if success:
-            print()
-            print_info("You can now safely remove USB drive")
-            print()
-
-            # Ask for reboot
-            reboot_choice = show_horizontal_menu(
-                t("flashing_success"),
-                [t("return_menu"), t("reboot_now")]
-            )
-
-            if reboot_choice == 2:
-                print_info("Rebooting...")
-                time.sleep(1)
-                os.system('reboot')
-
-            return True
-        else:
-            print()
-            print_error("Flashing failed")
-            press_enter_to_continue()
-            return False
-    else:
-        if not device['mountpoint']:
-            usb_handler.unmount_device()
+    if not (0 <= image_index < len(images)):
+        unmount_if_needed()
         return False
+
+    selected_image = images[image_index]
+    return flash_to_device(selected_image['path'], cleanup=unmount_if_needed)
 
 
 def manage_ram_images():
-    """Manage images in RAM - view, flash, or delete"""
-
+    """Manage downloaded images in RAM - flash or delete"""
     while True:
-        clear_screen()
-        print_header(t("flash_downloaded"))
-
-        # List images in RAM
         ram_dir = config.TEMP_DIR
         if not os.path.exists(ram_dir):
-            print_error(f"RAM directory not found: {ram_dir}")
-            press_enter_to_continue()
+            show_text_screen(t("images_in_ram"),
+                             [f"RAM directory not found: {ram_dir}"])
             return False
 
-        # Find image files
         image_files = []
         for filename in os.listdir(ram_dir):
-            # Check for image file extensions
             if filename.endswith(('.img', '.img.xz', '.xz')):
                 filepath = os.path.join(ram_dir, filename)
                 if os.path.isfile(filepath):
-                    size = os.path.getsize(filepath)
                     image_files.append({
                         'filename': filename,
                         'path': filepath,
-                        'size': size
+                        'size': os.path.getsize(filepath)
                     })
 
         if not image_files:
-            print_info(f"No images found in RAM ({ram_dir})")
-            print_info("Download an image first using 'Download from HTTP' option")
-            press_enter_to_continue()
+            show_text_screen(t("images_in_ram"), [
+                f"No images found in RAM ({ram_dir}).",
+                "Download an image first using the API download option.",
+            ])
             return False
 
-        print_success(f"Found {len(image_files)} image(s) in RAM:")
-        print()
-
-        # Build menu options
         menu_options = ["← Back to Flash Menu"]
-        for idx, img in enumerate(image_files, 1):
+        for img in image_files:
             menu_options.append(f"{img['filename']} ({format_bytes(img['size'])})")
-
-        print_info("Select an image to manage:")
-        print()
 
         choice = show_menu(t("images_in_ram"), menu_options)
 
         if choice == 0 or choice == 1:
             return False
 
-        # Image selected
         image_index = choice - 2
-        if 0 <= image_index < len(image_files):
-            selected = image_files[image_index]
+        if not (0 <= image_index < len(image_files)):
+            continue
 
-            # Show action menu
-            clear_screen()
-            print_header(f"MANAGE: {selected['filename']}")
-            print()
-            print_info(f"File: {selected['filename']}")
-            print_info(f"Size: {format_bytes(selected['size'])}")
-            print_info(f"Path: {selected['path']}")
-            print()
+        selected = image_files[image_index]
 
-            action_options = [
-                t("back_to_image_list"),
-                t("action_flash"),
-                t("action_delete")
-            ]
+        action_options = [
+            t("back_to_image_list"),
+            t("action_flash"),
+            t("action_delete")
+        ]
 
-            action_choice = show_menu(t("select_action"), action_options)
+        action_choice = show_menu(
+            f"{selected['filename']} ({format_bytes(selected['size'])})",
+            action_options
+        )
 
-            if action_choice == 0 or action_choice == 1:
-                continue  # Back to image list
+        if action_choice == 0 or action_choice == 1:
+            continue  # Back to image list
 
-            elif action_choice == 2:
-                # Flash image
-                print()
+        elif action_choice == 2:
+            # Flash image
+            if flash_to_device(selected['path']):
+                return True
 
-                # Select target device
-                from flash import FlashHandler, select_target_device
-
-                print_info("Select target device for flashing:")
-                print()
-
-                target_device = select_target_device()
-                if not target_device:
-                    print_info("No device selected")
-                    press_enter_to_continue()
-                    continue
-
-                print()
-                print_success(f"Target device: {target_device}")
-                print()
-
-                # Flash the image
-                flash_handler = FlashHandler(emmc_device=target_device)
-                success = flash_handler.flash_image(selected['path'])
-
-                if success:
-                    print()
-                    # Ask for reboot
-                    reboot_choice = show_horizontal_menu(
-                        t("flashing_success"),
-                        [t("return_menu"), t("reboot_now")]
-                    )
-
-                    if reboot_choice == 2:
-                        print_info("Rebooting...")
-                        time.sleep(1)
-                        os.system('reboot')
-
-                    return True
-                else:
-                    print()
-                    print_error("Flashing failed")
-                    press_enter_to_continue()
-
-            elif action_choice == 3:
-                # Delete image
-                print()
-                print_warning(f"Delete {selected['filename']}?")
-                print_info(f"This will free {format_bytes(selected['size'])} of RAM")
-                print()
-
-                confirm_choice = show_horizontal_menu(
-                    t("confirm_deletion"),
-                    [t("cancel"), t("yes_delete")]
-                )
-
-                if confirm_choice == 2:
-                    try:
-                        os.remove(selected['path'])
-                        print()
-                        print_success(f"Deleted: {selected['filename']}")
-                        print_info(f"Freed {format_bytes(selected['size'])} of RAM")
-                    except Exception as e:
-                        print()
-                        print_error(f"Failed to delete: {e}")
-
-                    press_enter_to_continue()
-                    # Return to image list to show updated list
-                    continue
+        elif action_choice == 3:
+            # Delete image
+            confirmed = show_confirm_screen(
+                t("confirm_deletion"),
+                [
+                    selected['filename'],
+                    f"{t('size')}: {format_bytes(selected['size'])}",
+                    "",
+                    "Deleting frees RAM for new downloads.",
+                ],
+                yes_label=t("yes_delete"),
+                no_label=t("cancel"),
+            )
+            if confirmed:
+                try:
+                    os.remove(selected['path'])
+                except Exception as e:
+                    show_text_screen(t("confirm_deletion"),
+                                     [f"Failed to delete: {e}"])
+                # Loop back to the (updated) image list
 
 
 def flash_image_menu():
     """Flash image to eMMC - with source selection"""
     while True:
-        clear_screen()
-        print_header(t("flash_menu"))
-
-        print_info(t("select_source"))
-        print()
-
         options = [
             t("back_to_main"),
             t("source_http"),
@@ -559,93 +371,82 @@ def flash_image_menu():
         source_choice = show_menu(t("select_image_source"), options)
 
         if source_choice == 0 or source_choice == 1:
-            # Back to main menu
             return
 
         elif source_choice == 2:
-            # Download from HTTP
-            result = flash_from_http()
-            if result:
-                return  # Return to main menu after successful flash
+            if flash_from_http():
+                return
 
         elif source_choice == 3:
-            # Load from USB
-            result = flash_from_usb()
-            if result:
-                return  # Return to main menu after successful flash
+            if flash_from_usb():
+                return
 
         elif source_choice == 4:
-            # Flash from Downloaded
-            result = manage_ram_images()
-            if result:
-                return  # Return to main menu after successful flash
-
-
+            if manage_ram_images():
+                return
 
 
 def system_info_menu():
     """Display system information in a scrollable curses screen."""
-    from utils import show_text_screen
+    def collect():
+        info = get_system_info()
 
-    info = get_system_info()
+        lines = [
+            f"Hostname:      {info['hostname']}",
+            f"Kernel:        {info['kernel']}",
+            f"Architecture:  {info['arch']}",
+            f"Memory:        {info['memory']}",
+            f"Free Space:    {info['disk_free']}",
+            "",
+            f"Device:        {config.JETHOME_DEVICE_NAME}",
+            f"Platform:      {config.JETHOME_PLATFORM}",
+            f"Version:       {config.APP_VERSION}",
+            "",
+            f"eMMC Device:   {config.EMMC_DEVICE}",
+            f"Temp Dir:      {config.TEMP_DIR}",
+            f"USB Mount:     {config.USB_MOUNT_POINT}",
+            "",
+        ]
 
-    lines = [
-        f"Hostname:      {info['hostname']}",
-        f"Kernel:        {info['kernel']}",
-        f"Architecture:  {info['arch']}",
-        f"Memory:        {info['memory']}",
-        f"Free Space:    {info['disk_free']}",
-        "",
-        f"Device:        {config.JETHOME_DEVICE_NAME}",
-        f"Platform:      {config.JETHOME_PLATFORM}",
-        "",
-        f"eMMC Device:   {config.EMMC_DEVICE}",
-        f"Temp Dir:      {config.TEMP_DIR}",
-        f"USB Mount:     {config.USB_MOUNT_POINT}",
-        "",
-    ]
+        network_handler = get_network_handler()
+        if network_handler:
+            status = network_handler.get_connection_status()
+            if status['connected']:
+                lines.append(f"Network:       Connected ({status['interface']})")
+                if status['ip']:
+                    lines.append(f"IP Address:    {status['ip']}")
+                if status['ssid']:
+                    lines.append(f"WiFi:          {status['ssid']}")
+            else:
+                lines.append("Network:       Not connected")
 
-    # Network status
-    network_handler = get_network_handler()
-    if network_handler:
-        status = network_handler.get_connection_status()
-        if status['connected']:
-            lines.append(f"Network:       Connected ({status['interface']})")
-            if status['ip']:
-                lines.append(f"IP Address:    {status['ip']}")
-            if status['ssid']:
-                lines.append(f"WiFi:          {status['ssid']}")
+        lines.append("")
+
+        web_port = 8124
+        if check_web_app_status("localhost", web_port):
+            local_ip = get_local_ip() or "localhost"
+            lines.append("Web UI:        Running")
+            lines.append(f"Access URL:    http://{local_ip}:{web_port}")
         else:
-            lines.append("Network:       Not connected")
+            lines.append(f"Web UI:        Not running (port {web_port})")
+        return lines
 
-    lines.append("")
-
-    # Web application status
-    web_port = 8124
-    if check_web_app_status("localhost", web_port):
-        local_ip = get_local_ip() or "localhost"
-        lines.append("Web UI:        Running")
-        lines.append(f"Access URL:    http://{local_ip}:{web_port}")
-    else:
-        lines.append(f"Web UI:        Not running (port {web_port})")
-
+    lines, _ = show_wait_screen(t("system_info"), "Collecting system info...", collect)
+    if isinstance(lines, Exception):
+        lines = [f"Failed to collect system info: {lines}"]
     show_text_screen("SYSTEM INFORMATION", lines)
 
 
 def main_menu():
     """Main menu loop"""
     while True:
-        # Show web app status before menu (always visible)
+        # Web UI address lives in the menu title so it is always visible
+        # without a plain-text interstitial print.
         web_port = 8124
-        web_running = check_web_app_status("localhost", web_port)
-        if web_running:
-            local_ip = get_local_ip()
-            if local_ip:
-                web_url = f"http://{local_ip}:{web_port}"
-            else:
-                web_url = f"http://localhost:{web_port}"
-            print_info(f"Web Interface: {create_clickable_link(web_url, web_url)}")
-            print()
+        title = t("main_menu")
+        if check_web_app_status("localhost", web_port):
+            local_ip = get_local_ip() or "localhost"
+            title = f"{title} · http://{local_ip}:{web_port}"
 
         options = [
             t("network_setup"),
@@ -653,10 +454,9 @@ def main_menu():
             t("system_info")
         ]
 
-        choice = show_menu(t("main_menu"), options)
+        choice = show_menu(title, options)
 
         if choice == 0:
-            # Cancelled (only in classic menu)
             continue
 
         elif choice == 1:
@@ -674,15 +474,12 @@ def cleanup_old_temp_dir():
     old_temp_dir = "/var/rescue"
     if os.path.exists(old_temp_dir) and old_temp_dir != config.TEMP_DIR:
         try:
-            import shutil
-            # Remove old downloaded images
             for item in os.listdir(old_temp_dir):
                 item_path = os.path.join(old_temp_dir, item)
                 # Only remove image files, keep logs
                 if item.endswith(('.img', '.img.xz', '.xz')) and not item.endswith('.log'):
                     try:
                         os.remove(item_path)
-                        print_info(f"Cleaned up old image: {item}")
                     except Exception as e:
                         print_error(f"Failed to remove {item}: {e}")
         except Exception as e:
@@ -695,14 +492,10 @@ def main():
         # Check root privileges
         require_root()
 
-        # Language selection
+        # Language selection (curses)
         clear_screen()
         lang_code = app_locale.select_language_interactive()
         app_locale.set_language(lang_code)
-
-        # Show banner with selected language
-        clear_screen()
-        show_banner()
 
         # Ensure directories exist
         ensure_directory(config.TEMP_DIR)
@@ -711,10 +504,7 @@ def main():
         # Clean up old temporary directory (migration from v1.2.1)
         cleanup_old_temp_dir()
 
-        # Log startup
-        print_info(app_locale.t("info") + ": Rescue Console Application started")
-
-        # Run main menu
+        # Straight into the curses main menu — no plain-text banner
         main_menu()
 
     except KeyboardInterrupt:
@@ -731,4 +521,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
