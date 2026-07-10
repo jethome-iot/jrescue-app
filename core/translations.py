@@ -134,6 +134,7 @@ TRANSLATIONS = {
 
         # Common
         "press_enter": "Press Enter to continue...",
+        "settings": "Settings",
         "error": "ERROR",
         "warning": "WARNING",
         "info": "INFO",
@@ -268,6 +269,7 @@ TRANSLATIONS = {
 
         # Common
         "press_enter": "Нажмите Enter для продолжения...",
+        "settings": "Настройки",
         "error": "ОШИБКА",
         "warning": "ПРЕДУПРЕЖДЕНИЕ",
         "info": "ИНФОРМАЦИЯ",
@@ -325,7 +327,7 @@ def select_language_interactive():
 
         def _select_lang(stdscr):
             curses.curs_set(0)
-            stdscr.clear()
+            stdscr.erase()
 
             # Initialize colors
             if curses.has_colors():
@@ -340,7 +342,7 @@ def select_language_interactive():
             current = 0
 
             while True:
-                stdscr.clear()
+                stdscr.erase()
                 h, w = stdscr.getmaxyx()
 
                 # Title

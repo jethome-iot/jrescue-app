@@ -13,6 +13,9 @@ import config
 
 # Try to import curses for interactive menu
 try:
+    # Esc responds in 25ms instead of the ~1s ncurses default (must be set
+    # before the first initscr).
+    os.environ.setdefault('ESCDELAY', '25')
     import curses
     CURSES_AVAILABLE = True
 except ImportError:
@@ -237,7 +240,7 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
         Selected option number (1-based) or 0 if cancelled
     """
     curses.curs_set(0)  # Hide cursor
-    stdscr.clear()
+    stdscr.erase()
 
     # Initialize colors if supported
     if curses.has_colors():
@@ -249,7 +252,7 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
     current_row = 0
 
     while True:
-        stdscr.clear()
+        stdscr.erase()
         h, w = stdscr.getmaxyx()
 
         # Compact title for small terminals (serial console, SSH)
@@ -412,7 +415,7 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
         Selected option number (1-based) or 0 if cancelled
     """
     curses.curs_set(0)  # Hide cursor
-    stdscr.clear()
+    stdscr.erase()
 
     # Initialize colors if supported
     if curses.has_colors():
@@ -424,7 +427,7 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
     current_option = 0
 
     while True:
-        stdscr.clear()
+        stdscr.erase()
         h, w = stdscr.getmaxyx()
 
         # Display title
@@ -562,7 +565,7 @@ def input_dialog_curses(stdscr, title: str, prompt: str, password: bool = False)
         User input string or None if cancelled
     """
     curses.curs_set(1)  # Show cursor
-    stdscr.clear()
+    stdscr.erase()
 
     # Initialize colors
     if curses.has_colors():
@@ -576,7 +579,7 @@ def input_dialog_curses(stdscr, title: str, prompt: str, password: bool = False)
     current_focus = 0  # 0 = input field, 1 = Cancel, 2 = OK
 
     while True:
-        stdscr.clear()
+        stdscr.erase()
         h, w = stdscr.getmaxyx()
 
         # Display title
@@ -787,7 +790,7 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
 
     top = 0
     while True:
-        stdscr.clear()
+        stdscr.erase()
         h, w = stdscr.getmaxyx()
 
         # Centered single-line title box
@@ -1071,6 +1074,197 @@ def show_confirm_screen(title: str, lines: List[str], yes_label: str = "YES",
     except Exception as e:
         print_error(f"Screen error: {e}")
         return False
+
+
+def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
+    """menuconfig-style settings screen (single curses session).
+
+    Each item is a dict:
+      {'type': 'bool'|'choice'|'string'|'int',
+       'label': str,
+       'get': callable() -> value,
+       'set': callable(value),
+       'help': str,                       # optional
+       'choices': [(value, label), ...]}  # for 'choice'
+    Values are applied immediately via set(); nothing persists across reboot.
+    """
+    curses.curs_set(0)
+    if curses.has_colors():
+        curses.start_color()
+        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)   # selected
+        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)    # title
+        curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # hint
+
+    def fmt(item) -> str:
+        kind = item['type']
+        if kind == 'bool':
+            return f"[{'*' if item['get']() else ' '}] {item['label']}"
+        if kind == 'choice':
+            cur = item['get']()
+            cur_label = next((lab for val, lab in item['choices'] if val == cur), str(cur))
+            return f"    {item['label']} ({cur_label})  --->"
+        # string / int
+        return f"    {item['label']} ({item['get']()})"
+
+    def hint_bar(text: str):
+        h, w = stdscr.getmaxyx()
+        if curses.has_colors():
+            stdscr.attron(curses.color_pair(4))
+        try:
+            stdscr.addstr(h - 1, 0, text[:max(0, w - 1)])
+        except curses.error:
+            pass
+        if curses.has_colors():
+            stdscr.attroff(curses.color_pair(4))
+
+    def inline_help(item):
+        stdscr.erase()
+        _draw_title_box(stdscr, item['label'])
+        y = 4
+        h, w = stdscr.getmaxyx()
+        for ln in item.get('help', 'No help available.').split('\n'):
+            if y >= h - 2:
+                break
+            try:
+                stdscr.addstr(y, 2, ln[:max(0, w - 3)])
+            except curses.error:
+                pass
+            y += 1
+        hint_bar("  any key — back")
+        stdscr.refresh()
+        stdscr.getch()
+
+    def inline_choice(item):
+        choices = item['choices']
+        cur_val = item['get']()
+        sel = next((i for i, (val, _) in enumerate(choices) if val == cur_val), 0)
+        while True:
+            stdscr.erase()
+            _draw_title_box(stdscr, item['label'])
+            h, w = stdscr.getmaxyx()
+            for i, (val, lab) in enumerate(choices):
+                y = 4 + i
+                if y >= h - 2:
+                    break
+                marker = "(X)" if val == cur_val else "( )"
+                line = f"  {marker} {lab}"
+                try:
+                    if i == sel and curses.has_colors():
+                        stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                        stdscr.addstr(y, 2, line[:max(0, w - 3)])
+                        stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                    else:
+                        stdscr.addstr(y, 2, line[:max(0, w - 3)])
+                except curses.error:
+                    pass
+            hint_bar("  ↑↓ move   Enter — select   Esc — cancel")
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key == curses.KEY_UP and sel > 0:
+                sel -= 1
+            elif key == curses.KEY_DOWN and sel < len(choices) - 1:
+                sel += 1
+            elif key in (ord('\n'), ord('\r')):
+                item['set'](choices[sel][0])
+                return
+            elif key in (27, ord('q'), ord('Q')):
+                return
+
+    def inline_edit(item):
+        digits_only = item['type'] == 'int'
+        buf = list(str(item['get']()))
+        curses.curs_set(1)
+        try:
+            while True:
+                stdscr.erase()
+                _draw_title_box(stdscr, item['label'])
+                h, w = stdscr.getmaxyx()
+                prompt = f"{item['label']}: "
+                text = ''.join(buf)
+                try:
+                    stdscr.addstr(h // 2, 2, (prompt + text)[:max(0, w - 3)])
+                except curses.error:
+                    pass
+                hint_bar("  Enter — save   Esc — cancel   Backspace — delete")
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key in (ord('\n'), ord('\r')):
+                    value = ''.join(buf)
+                    if digits_only:
+                        if not value.isdigit():
+                            continue
+                        item['set'](int(value))
+                    else:
+                        item['set'](value)
+                    return
+                elif key == 27:
+                    return
+                elif key in (curses.KEY_BACKSPACE, 127, 8):
+                    if buf:
+                        buf.pop()
+                elif 32 <= key <= 126:
+                    if not digits_only or chr(key).isdigit():
+                        buf.append(chr(key))
+        finally:
+            curses.curs_set(0)
+
+    current = 0
+    top = 0
+    while True:
+        stdscr.erase()
+        _draw_title_box(stdscr, title)
+        h, w = stdscr.getmaxyx()
+        body_top = 4
+        body_h = max(1, h - body_top - 1)
+        top = min(max(0, current - body_h + 1), max(0, len(items) - body_h), top)
+        if current < top:
+            top = current
+        elif current >= top + body_h:
+            top = current - body_h + 1
+
+        for i in range(body_h):
+            idx = top + i
+            if idx >= len(items):
+                break
+            line = fmt(items[idx])
+            try:
+                if idx == current and curses.has_colors():
+                    stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                    stdscr.addstr(body_top + i, 2, line[:max(0, w - 3)])
+                    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                else:
+                    stdscr.addstr(body_top + i, 2, line[:max(0, w - 3)])
+            except curses.error:
+                pass
+
+        hint_bar("  ↑↓ move   Space/Enter — change   ? — help   Esc/q — back   (runtime only, resets on reboot)")
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        item = items[current] if items else None
+        if key == curses.KEY_UP and current > 0:
+            current -= 1
+        elif key == curses.KEY_DOWN and current < len(items) - 1:
+            current += 1
+        elif key == ord('?') and item:
+            inline_help(item)
+        elif key in (ord(' '), ord('\n'), ord('\r')) and item:
+            if item['type'] == 'bool':
+                item['set'](not item['get']())
+            elif item['type'] == 'choice':
+                inline_choice(item)
+            elif item['type'] in ('string', 'int'):
+                inline_edit(item)
+        elif key in (27, ord('q'), ord('Q')):
+            return
+
+
+def show_settings_screen(title: str, items: List[dict]) -> None:
+    """Show a menuconfig-style settings screen (curses)."""
+    try:
+        curses.wrapper(show_settings_screen_curses, title, items)
+    except Exception as e:
+        print_error(f"Settings screen error: {e}")
 
 
 def press_enter_to_continue():

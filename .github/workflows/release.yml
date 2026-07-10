@@ -1,5 +1,22 @@
 name: Release
 
+# Publish a versioned release tarball whenever a vX.Y.Z tag is pushed.
+# The recovery image build (buildroot-recovery-build) fetches this asset by
+# version — see package/jrescue-app/jrescue-app.mk there.
+#
+# The git tag is the ONLY place the version lives: this workflow stamps it
+# into core/config.py (APP_VERSION) while building the tarball. In a git
+# checkout APP_VERSION stays "dev".
+#
+# Tags may live on any branch: normal releases are tagged on master; hotfix
+# releases for an older line are tagged on a branch cut from the old tag
+# (e.g. `git checkout -b hotfix/1.3.x v1.3.4`). Hotfix releases are built
+# the same way but are NOT marked "Latest" and do not touch master's README.
+#
+# To cut a release:
+#   1. commit everything, then: git tag vX.Y.Z && git push origin <branch> vX.Y.Z
+#   2. bump JRESCUE_APP_VERSION in the buildroot recipe to X.Y.Z
+
 on:
   push:
     tags:
@@ -13,6 +30,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # full history — needed to check tag ancestry vs master
+
+      - name: Check whether the tag is on master
+        id: ancestry
+        run: |
+          git fetch origin master
+          if git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master; then
+            echo "on_master=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on_master=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
 
       - name: Build release tarball (version stamped from the tag)
         run: |
@@ -32,14 +62,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Hotfix releases from old lines must not steal the "Latest" badge.
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
+            --latest=${{ steps.ancestry.outputs.on_master }} \
             jrescue-app-*.tar.gz
 
       - name: Update current version in README (commit to master)
+        if: steps.ancestry.outputs.on_master == 'true'
         run: |
-          git fetch origin master
           git checkout -B master origin/master
           sed -i -E "s|^\*\*Current version:\*\* v.*|**Current version:** ${GITHUB_REF_NAME}|" README.md
           if git diff --quiet README.md; then

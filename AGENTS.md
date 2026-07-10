@@ -70,7 +70,9 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   `show_menu`, `show_horizontal_menu`, `input_dialog`, `confirm_action`; screens:
   `show_text_screen` (scrollable report), `show_wait_screen` (spinner around a
   blocking call, captures its stdout), `show_progress_screen` (bar; runs a
-  `worker(progress)` in a thread), `show_confirm_screen` (info + NO/YES). All in
+  `worker(progress)` in a thread), `show_confirm_screen` (info + NO/YES),
+  `show_settings_screen` (menuconfig-style; declarative bool/choice/string/int
+  items with get/set callables — runtime-only, resets on reboot). All in
   `core/utils.py`; Python `curses` is guaranteed via `select BR2_PACKAGE_PYTHON3_CURSES`.
   Esc = cancel. Do NOT add plain `print`/`press_enter` steps between curses screens —
   they flash and corrupt the flow; route long operations through
