@@ -23,6 +23,7 @@ from utils import (
     require_root, clear_screen, print_info, print_error,
     show_menu, show_horizontal_menu, input_dialog,
     show_text_screen, show_wait_screen, show_progress_screen, show_confirm_screen,
+    show_settings_screen,
     get_system_info, format_bytes, check_disk_space, ensure_directory,
     check_web_app_status, get_local_ip
 )
@@ -437,6 +438,57 @@ def system_info_menu():
     show_text_screen("SYSTEM INFORMATION", lines)
 
 
+def settings_menu():
+    """menuconfig-style runtime settings (reset on reboot)."""
+    items = [
+        {
+            'type': 'choice',
+            'label': 'Language',
+            'choices': [('en', 'English'), ('ru', 'Русский')],
+            'get': app_locale.get_language,
+            'set': app_locale.set_language,
+            'help': "Interface language for the console application.\n"
+                    "Applies immediately to all menus.",
+        },
+        {
+            'type': 'string',
+            'label': 'Firmware server',
+            'get': lambda: config.JETHOME_API_BASE,
+            'set': lambda v: setattr(config, 'JETHOME_API_BASE', v.rstrip('/')),
+            'help': "Base URL of the JetHome firmware API.\n"
+                    "Image lists and downloads come from\n"
+                    "<server>/api/devices/<id>/info.",
+        },
+        {
+            'type': 'int',
+            'label': 'Network timeout (s)',
+            'get': lambda: config.NETWORK_TIMEOUT,
+            'set': lambda v: setattr(config, 'NETWORK_TIMEOUT', v),
+            'help': "Timeout for API requests and downloads, in seconds.",
+        },
+        {
+            'type': 'bool',
+            'label': 'Verbose logs',
+            'get': lambda: config.VERBOSE_LOGS,
+            'set': lambda v: setattr(config, 'VERBOSE_LOGS', v),
+            'help': "Show informational messages in captured\n"
+                    "operation output (connection test, flashing).",
+        },
+    ]
+    show_settings_screen(t("settings"), items)
+
+
+def drop_to_shell():
+    """Exit curses and run a root shell on this tty; the app resumes on exit."""
+    clear_screen()
+    print("jrescue: type 'exit' to return to the menu\n")
+    try:
+        import subprocess
+        subprocess.call(['/bin/bash', '-l'])
+    except Exception as e:
+        print_error(f"Shell failed: {e}")
+
+
 def main_menu():
     """Main menu loop"""
     while True:
@@ -451,7 +503,9 @@ def main_menu():
         options = [
             t("network_setup"),
             t("flash_image"),
-            t("system_info")
+            t("system_info"),
+            t("settings"),
+            t("shell")
         ]
 
         choice = show_menu(title, options)
@@ -467,6 +521,12 @@ def main_menu():
 
         elif choice == 3:
             system_info_menu()
+
+        elif choice == 4:
+            settings_menu()
+
+        elif choice == 5:
+            drop_to_shell()
 
 
 def cleanup_old_temp_dir():

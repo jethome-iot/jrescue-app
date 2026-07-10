@@ -134,6 +134,8 @@ TRANSLATIONS = {
 
         # Common
         "press_enter": "Press Enter to continue...",
+        "settings": "Settings",
+        "shell": "Shell (advanced)",
         "error": "ERROR",
         "warning": "WARNING",
         "info": "INFO",
@@ -268,6 +270,8 @@ TRANSLATIONS = {
 
         # Common
         "press_enter": "Нажмите Enter для продолжения...",
+        "settings": "Настройки",
+        "shell": "Терминал (shell)",
         "error": "ОШИБКА",
         "warning": "ПРЕДУПРЕЖДЕНИЕ",
         "info": "ИНФОРМАЦИЯ",
@@ -317,99 +321,21 @@ def t(key: str, **kwargs) -> str:
 
 def select_language_interactive():
     """
-    Interactive language selection using curses
-    Returns selected language code
+    Interactive language selection (delegates to the shared menuconfig-style
+    menu in utils so the very first screen matches the rest of the UI).
+    Returns selected language code.
     """
     try:
-        import curses
+        from utils import show_menu
 
-        def _select_lang(stdscr):
-            curses.curs_set(0)
-            stdscr.clear()
-
-            # Initialize colors
-            if curses.has_colors():
-                curses.start_color()
-                curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Selected
-                curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)   # Title
-
-            languages = [
-                ("en", t("language_english")),
-                ("ru", t("language_russian"))
-            ]
-            current = 0
-
-            while True:
-                stdscr.clear()
-                h, w = stdscr.getmaxyx()
-
-                # Title
-                title = t("select_language")
-                title_width = len(title) + 4
-                start_x = max(0, (w - title_width - 2) // 2)
-
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-
-                stdscr.addstr(1, start_x, "╔" + "═" * title_width + "╗")
-                stdscr.addstr(2, start_x, "║ " + title.center(title_width - 2) + " ║")
-                stdscr.addstr(3, start_x, "╚" + "═" * title_width + "╝")
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-
-                # Options
-                start_y = 6
-                for idx, (code, name) in enumerate(languages):
-                    y = start_y + (idx * 4)
-
-                    if idx == current:
-                        text = f" ► {name} "
-                        border = "─" * len(text)
-                        start_x = max(2, (w - len(text)) // 2)
-
-                        if curses.has_colors():
-                            stdscr.attron(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-
-                        if y < h - 1:
-                            stdscr.addstr(y, start_x, border)
-                        if y + 1 < h - 1:
-                            stdscr.addstr(y + 1, start_x, text)
-                        if y + 2 < h - 1:
-                            stdscr.addstr(y + 2, start_x, border)
-
-                        if curses.has_colors():
-                            stdscr.attroff(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-                    else:
-                        text = f"   {name}"
-                        start_x = max(2, (w - len(text)) // 2)
-                        if y + 1 < h - 1:
-                            stdscr.addstr(y + 1, start_x, text)
-
-                # Instructions
-                instr = "↑↓: Navigate  |  Enter: Select"
-                if len(instr) < w - 4:
-                    instr_x = max(2, (w - len(instr)) // 2)
-                    if h - 2 >= 0:
-                        stdscr.addstr(h - 2, instr_x, instr)
-
-                stdscr.refresh()
-
-                # Input
-                key = stdscr.getch()
-
-                if key == curses.KEY_UP and current > 0:
-                    current -= 1
-                elif key == curses.KEY_DOWN and current < len(languages) - 1:
-                    current += 1
-                elif key == curses.KEY_ENTER or key in [10, 13]:
-                    return languages[current][0]
-                elif key == ord('1'):
-                    return languages[0][0]
-                elif key == ord('2'):
-                    return languages[1][0]
-
-        return curses.wrapper(_select_lang)
+        languages = [
+            ("en", t("language_english")),
+            ("ru", t("language_russian")),
+        ]
+        choice = show_menu(t("select_language"), [name for _, name in languages])
+        if 1 <= choice <= len(languages):
+            return languages[choice - 1][0]
+        return "en"
 
     except Exception:
         # Fallback to simple menu
@@ -427,4 +353,3 @@ def select_language_interactive():
             return "en"
         except (KeyboardInterrupt, EOFError):
             return "en"
-

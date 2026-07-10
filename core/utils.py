@@ -13,6 +13,9 @@ import config
 
 # Try to import curses for interactive menu
 try:
+    # Esc responds in 25ms instead of the ~1s ncurses default (must be set
+    # before the first initscr).
+    os.environ.setdefault('ESCDELAY', '25')
     import curses
     CURSES_AVAILABLE = True
 except ImportError:
@@ -224,6 +227,83 @@ def wait_with_spinner(seconds: int, message: str = "Please wait"):
 
     print("\r" + " " * 80 + "\r", end='', flush=True)  # Clear line
 
+def _init_colors():
+    """Initialize the shared color pairs used by every curses screen."""
+    if not curses.has_colors():
+        return
+    curses.start_color()
+    curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)   # selected
+    curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)    # frame/title
+    curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)   # normal text
+    curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # hint
+    curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLUE)    # input field
+
+
+def _draw_frame(stdscr, title: str, hint: str = "") -> tuple:
+    """Draw a full-screen menuconfig-style frame.
+
+    ┌─[ TITLE ]───────────────┐
+    │  ...content area...     │
+    ├─────────────────────────┤   (only when hint is given)
+    │ hint                    │
+    └─────────────────────────┘
+
+    Returns (y0, x0, inner_h, inner_w) of the content area.
+    """
+    h, w = stdscr.getmaxyx()
+    if h < 6 or w < 20:  # degrade gracefully on tiny terminals
+        return 0, 0, h, w
+
+    frame_attr = (curses.color_pair(2) | curses.A_BOLD) if curses.has_colors() else 0
+
+    label = f"[ {title} ]"
+    if len(label) > w - 6:
+        label = label[:w - 9] + "… ]"
+
+    try:
+        stdscr.attron(frame_attr)
+        # top border with embedded title
+        top = "┌" + "─" * (w - 2) + "┐"
+        stdscr.addstr(0, 0, top[:w - 1])
+        try:
+            stdscr.addstr(0, w - 1, "┐")
+        except curses.error:
+            pass
+        stdscr.addstr(0, max(1, (w - len(label)) // 2), label)
+        # side borders
+        bottom_border_y = h - 1
+        hint_sep_y = h - 3 if hint else None
+        for y in range(1, bottom_border_y):
+            stdscr.addstr(y, 0, "│")
+            try:
+                stdscr.addstr(y, w - 1, "│")
+            except curses.error:
+                pass
+        if hint:
+            stdscr.addstr(hint_sep_y, 0, "├" + "─" * (w - 2))
+            try:
+                stdscr.addstr(hint_sep_y, w - 1, "┤")
+            except curses.error:
+                pass
+        # bottom border
+        try:
+            stdscr.addstr(bottom_border_y, 0, "└" + "─" * (w - 2) + "┘")
+        except curses.error:
+            pass  # writing the last cell always raises after drawing
+        stdscr.attroff(frame_attr)
+
+        if hint:
+            hint_attr = curses.color_pair(4) if curses.has_colors() else 0
+            stdscr.attron(hint_attr)
+            stdscr.addstr(h - 2, 2, hint[:max(0, w - 4)])
+            stdscr.attroff(hint_attr)
+    except curses.error:
+        pass
+
+    inner_h = (hint_sep_y if hint else bottom_border_y) - 1
+    return 1, 2, inner_h, w - 4
+
+
 def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
     """
     Interactive menu using curses (arrow keys navigation)
@@ -237,148 +317,53 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
         Selected option number (1-based) or 0 if cancelled
     """
     curses.curs_set(0)  # Hide cursor
-    stdscr.clear()
-
-    # Initialize colors if supported
-    if curses.has_colors():
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Selected
-        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)   # Title
-        curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Normal
+    _init_colors()
 
     current_row = 0
+    top = 0
 
     while True:
-        stdscr.clear()
-        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        # menuconfig-style: full-screen frame, compact left-aligned list,
+        # scrolling for long lists. No syscalls in the draw loop.
+        y0, x0, body_h, body_w = _draw_frame(
+            stdscr, title, "↑↓ move   Enter select   1-9 jump   Esc back")
+        y0 += 1  # breathing row under the top border
+        body_h = max(1, body_h - 1)
 
-        # Compact title for small terminals (serial console, SSH)
-        title_padded = f"  {title.upper()}  "
-        title_width = len(title_padded) + 4  # Minimal padding
-        title_display = title_padded.center(title_width)
+        if current_row < top:
+            top = current_row
+        elif current_row >= top + body_h:
+            top = current_row - body_h + 1
+        top = max(0, min(top, max(0, len(options) - body_h)))
 
-        # Draw title - compact version (3 lines total)
-        start_x = max(0, (w - title_width - 2) // 2)
-
-        if curses.has_colors():
-            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-
-        # Single line title with border
-        stdscr.addstr(0, start_x, "╔" + "═" * title_width + "╗")
-        stdscr.addstr(1, start_x, "║" + title_display + "║")
-        stdscr.addstr(2, start_x, "╚" + "═" * title_width + "╝")
-
-        if curses.has_colors():
-            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-
-        # Display options (compact for small terminals)
-        start_y = 4  # Start below title (which now takes 3 lines)
-        line_spacing = 4  # Better spacing for visibility (selected item takes 3 lines + 1 gap)
-
-        # Calculate padding based on screen size for bigger visual appearance
-        padding_multiplier = max(2, w // 40)  # More padding on wider screens
-
-        for idx, option in enumerate(options):
-            y = start_y + (idx * line_spacing)
-            if y >= h - 4:  # Don't overflow screen (reduced margin)
+        for i in range(body_h):
+            idx = top + i
+            if idx >= len(options):
                 break
+            marker = "❯" if idx == current_row else " "
+            line = f" {marker} {idx + 1}. {options[idx]} "
+            if len(line) > body_w - 2:
+                line = line[:max(0, body_w - 5)] + "..."
+            try:
+                if idx == current_row:
+                    attr = (curses.color_pair(1) | curses.A_BOLD) if curses.has_colors() \
+                        else curses.A_REVERSE
+                    stdscr.addstr(y0 + i, x0 + 1, line, attr)
+                elif curses.has_colors():
+                    stdscr.addstr(y0 + i, x0 + 1, line, curses.color_pair(3))
+                else:
+                    stdscr.addstr(y0 + i, x0 + 1, line)
+            except curses.error:
+                pass
 
-            # Format option text
-            option_display = option
-
-            if idx == current_row:
-                # Highlighted option - compact (3 lines: border + text + border)
-                prefix = "►  "
-                number = f"{idx + 1}."
-
-                text_core = f"{prefix}{number} {option_display}"
-                text = f" {text_core} "
-
-                # Truncate if too long
-                if len(text) > w - 10:
-                    text = text[:w - 13] + "..."
-
-                # Center the menu item
-                start_x = max(2, (w - len(text)) // 2)
-
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-
-                # Draw TOP border (compact)
-                border = "─" * len(text)
-                if y > 0 and y < h - 1:
-                    stdscr.addstr(y, start_x, border)
-
-                # Draw main text line (BOLD + REVERSE)
-                if y + 1 < h - 1:
-                    stdscr.addstr(y + 1, start_x, text)
-
-                # Draw BOTTOM border (compact)
-                if y + 2 < h - 1:
-                    stdscr.addstr(y + 2, start_x, border)
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-            else:
-                # Normal option - single line
-                prefix = "   "
-                number = f"{idx + 1}."
-                text = f"{prefix}{number} {option_display}"
-
-                # Truncate if too long
-                if len(text) > w - 10:
-                    text = text[:w - 13] + "..."
-
-                # Center the menu item
-                start_x = max(2, (w - len(text)) // 2)
-
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-
-                # Draw single line for non-selected items (middle line of 3-line spacing)
-                if y + 1 < h - 1:
-                    stdscr.addstr(y + 1, start_x, text)
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
-
-        # Display web app info if running (before instructions)
-        web_port = 8124
-        web_running = check_web_app_status("localhost", web_port)
-        if web_running:
-            local_ip = get_local_ip()
-            if local_ip:
-                web_url = f"http://{local_ip}:{web_port}"
-            else:
-                web_url = f"http://localhost:{web_port}"
-            web_info = f"Web: {web_url}"
-            # Truncate if too long
-            if len(web_info) > w - 4:
-                web_info = web_info[:w - 7] + "..."
-            web_x = max(2, (w - len(web_info)) // 2)
-            if h - 4 >= 0:
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3) | curses.A_DIM)
-                stdscr.addstr(h - 4, web_x, web_info)
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3) | curses.A_DIM)
-
-        # Display instructions (compact for small terminals)
-        instructions = "↑↓: Navigate  |  Enter: Select  |  1-9: Jump"
-
-        if len(instructions) < w - 4:
-            instr_x = max(2, (w - len(instructions)) // 2)
-
-            # Draw instructions (compact - 2 lines)
-            if h - 2 >= 0:
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-
-                # Instructions text
-                stdscr.addstr(h - 2, instr_x, instructions)
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
+        # Scroll indicator for long lists
+        if len(options) > body_h:
+            pos = f"[{current_row + 1}/{len(options)}]"
+            try:
+                stdscr.addstr(0, max(0, stdscr.getmaxyx()[1] - len(pos) - 3), pos)
+            except curses.error:
+                pass
 
         stdscr.refresh()
 
@@ -391,6 +376,8 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
             current_row += 1
         elif key == curses.KEY_ENTER or key in [10, 13]:  # Enter key
             return current_row + 1
+        elif key in (27, ord('q'), ord('Q')):  # Esc / q = cancel
+            return 0
         elif key >= ord('1') and key <= ord('9'):  # Digit keys 1-9
             digit = key - ord('0')
             # Jump to item by number (1-based)
@@ -412,28 +399,20 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
         Selected option number (1-based) or 0 if cancelled
     """
     curses.curs_set(0)  # Hide cursor
-    stdscr.clear()
-
-    # Initialize colors if supported
-    if curses.has_colors():
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Selected
-        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)   # Title
-        curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Normal
+    _init_colors()
 
     current_option = 0
 
     while True:
-        stdscr.clear()
-        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        y0, x0, body_h, body_w = _draw_frame(
+            stdscr, "Confirm", "←→ move   Enter select   Esc back")
 
-        # Display title
+        # Wrap the question inside the frame
         title_lines = []
-        # Split long title into multiple lines
-        max_title_width = min(w - 10, 80)
-        words = title.split()
+        max_title_width = max(10, body_w - 4)
         current_line = ""
-        for word in words:
+        for word in title.split():
             if len(current_line) + len(word) + 1 <= max_title_width:
                 current_line += (word + " ")
             else:
@@ -443,87 +422,47 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
         if current_line:
             title_lines.append(current_line.strip())
 
-        # Draw title centered
-        start_y = max(2, (h - 10) // 2)
-        if curses.has_colors():
-            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-
+        w = stdscr.getmaxyx()[1]
+        text_y = max(y0 + 1, y0 + (body_h - len(title_lines) - 3) // 2)
         for idx, line in enumerate(title_lines):
-            x = max(0, (w - len(line)) // 2)
-            if start_y + idx < h - 8:
-                stdscr.addstr(start_y + idx, x, line)
+            if text_y + idx >= y0 + body_h - 2:
+                break
+            try:
+                stdscr.addstr(text_y + idx, max(x0, (w - len(line)) // 2), line,
+                              curses.color_pair(3) if curses.has_colors() else 0)
+            except curses.error:
+                pass
 
-        if curses.has_colors():
-            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-
-        # Calculate horizontal layout for options
-        options_y = start_y + len(title_lines) + 3
-
-        # Calculate spacing
-        total_options_width = sum(len(opt) + 6 for opt in options)  # +6 for padding and borders
-        spacing = 4
-        total_width = total_options_width + spacing * (len(options) - 1)
-
-        # Start x position to center all options
-        start_x = max(2, (w - total_width) // 2)
-
-        # Draw options horizontally
-        current_x = start_x
-        for idx, option in enumerate(options):
-            # Create button text with padding
-            button_text = f" {option} "
-            button_width = len(button_text) + 2  # +2 for borders
-
-            if idx == current_option:
-                # Selected option - highlighted
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-
-                # Draw button with borders
-                if options_y < h - 4 and current_x + button_width < w - 2:
-                    border_line = "─" * len(button_text)
-                    stdscr.addstr(options_y, current_x, f"┌{border_line}┐")
-                    stdscr.addstr(options_y + 1, current_x, f"│{button_text}│")
-                    stdscr.addstr(options_y + 2, current_x, f"└{border_line}┘")
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-            else:
-                # Normal option
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-
-                # Draw simple button
-                if options_y + 1 < h - 4 and current_x + button_width < w - 2:
-                    stdscr.addstr(options_y + 1, current_x, f" {button_text} ")
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
-
-            current_x += button_width + spacing
-
-        # Display instructions
-        instructions = "←→: Navigate  |  Enter: Select  |  1-9: Jump"
-        if len(instructions) < w - 4:
-            instr_x = max(2, (w - len(instructions)) // 2)
-            if h - 2 >= 0:
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-                stdscr.addstr(h - 2, instr_x, instructions)
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
+        # menuconfig-style single-row buttons:  < Cancel >   < Flash >
+        buttons = [f"< {opt} >" for opt in options]
+        total_width = sum(len(b) for b in buttons) + 4 * (len(buttons) - 1)
+        bx = max(x0, (w - total_width) // 2)
+        by = min(y0 + body_h - 1, text_y + len(title_lines) + 2)
+        for idx, btn in enumerate(buttons):
+            try:
+                if idx == current_option:
+                    attr = (curses.color_pair(1) | curses.A_BOLD) if curses.has_colors() \
+                        else curses.A_REVERSE
+                    stdscr.addstr(by, bx, btn, attr)
+                else:
+                    stdscr.addstr(by, bx, btn)
+            except curses.error:
+                pass
+            bx += len(btn) + 4
 
         stdscr.refresh()
 
         # Get user input
         key = stdscr.getch()
 
-        if key == curses.KEY_LEFT and current_option > 0:
+        if key in (curses.KEY_LEFT, curses.KEY_UP) and current_option > 0:
             current_option -= 1
-        elif key == curses.KEY_RIGHT and current_option < len(options) - 1:
+        elif key in (curses.KEY_RIGHT, curses.KEY_DOWN, ord('\t')) and current_option < len(options) - 1:
             current_option += 1
         elif key == curses.KEY_ENTER or key in [10, 13]:  # Enter key
             return current_option + 1
+        elif key in (27, ord('q'), ord('Q')):  # Esc / q = cancel
+            return 0
         elif key >= ord('1') and key <= ord('9'):  # Digit keys 1-9
             digit = key - ord('0')
             if 1 <= digit <= len(options):
@@ -550,194 +489,96 @@ def show_menu(title: str, options: List[str]) -> int:
 
 def input_dialog_curses(stdscr, title: str, prompt: str, password: bool = False) -> Optional[str]:
     """
-    Interactive input dialog with horizontal menu (Cancel/OK)
+    menuconfig-style input dialog: framed prompt, input field, < Cancel > < OK >.
 
-    Args:
-        stdscr: Curses screen object
-        title: Dialog title
-        prompt: Input field label
-        password: If True, mask input with asterisks
-
-    Returns:
-        User input string or None if cancelled
+    Focus order: input field -> Cancel -> OK (Tab/arrows cycle).
+    Esc cancels. Returns the entered string or None if cancelled.
     """
-    curses.curs_set(1)  # Show cursor
-    stdscr.clear()
-
-    # Initialize colors
-    if curses.has_colors():
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Selected
-        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)   # Title
-        curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Normal
-        curses.init_pair(4, curses.COLOR_WHITE, curses.COLOR_BLUE)   # Input field
+    curses.curs_set(1)
+    _init_colors()
 
     user_input = ""
     current_focus = 0  # 0 = input field, 1 = Cancel, 2 = OK
 
-    while True:
-        stdscr.clear()
-        h, w = stdscr.getmaxyx()
+    try:
+        while True:
+            stdscr.erase()
+            y0, x0, body_h, body_w = _draw_frame(
+                stdscr, title, "Tab/↑↓ focus   Enter select   Esc cancel")
+            w = stdscr.getmaxyx()[1]
 
-        # Display title
-        start_y = max(2, (h - 15) // 2)
-        if curses.has_colors():
-            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
+            # Prompt
+            prompt_y = y0 + max(1, (body_h - 6) // 2)
+            try:
+                stdscr.addstr(prompt_y, max(x0, (w - len(prompt)) // 2), prompt,
+                              curses.color_pair(3) if curses.has_colors() else 0)
+            except curses.error:
+                pass
 
-        title_x = max(0, (w - len(title)) // 2)
-        if start_y < h - 10:
-            stdscr.addstr(start_y, title_x, title)
-
-        if curses.has_colors():
-            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-
-        # Display prompt
-        prompt_y = start_y + 3
-        prompt_x = max(2, (w - len(prompt) - 30) // 2)
-        if prompt_y < h - 8:
-            stdscr.addstr(prompt_y, prompt_x, prompt)
-
-        # Input field
-        input_y = prompt_y + 2
-        input_width = min(40, w - 10)
-        input_x = max(2, (w - input_width) // 2)
-
-        # Draw input field background
-        if input_y < h - 6:
-            if curses.has_colors() and current_focus == 0:
-                stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-            elif curses.has_colors():
-                stdscr.attron(curses.color_pair(4))
-
-            # Draw input box
-            display_text = user_input  # Always show actual text
-            # Truncate if too long
+            # Input field
+            input_width = min(40, body_w - 4)
+            input_x = max(x0, (w - input_width) // 2)
+            input_y = prompt_y + 2
+            display_text = user_input
             if len(display_text) > input_width - 4:
                 display_text = display_text[-(input_width - 4):]
+            field_attr = curses.color_pair(5) if curses.has_colors() else curses.A_UNDERLINE
+            if current_focus == 0:
+                field_attr |= curses.A_BOLD
+            try:
+                stdscr.addstr(input_y, input_x,
+                              f" {display_text:<{input_width - 2}} ", field_attr)
+            except curses.error:
+                pass
 
-            input_line = f" {display_text:<{input_width - 2}} "
-            stdscr.addstr(input_y, input_x, input_line)
+            # Buttons: < Cancel >   < OK >
+            buttons = ["< Cancel >", "< OK >"]
+            total = sum(len(b) for b in buttons) + 4
+            bx = max(x0, (w - total) // 2)
+            by = input_y + 2
+            for idx, btn in enumerate(buttons, start=1):
+                try:
+                    if current_focus == idx:
+                        attr = (curses.color_pair(1) | curses.A_BOLD) if curses.has_colors() \
+                            else curses.A_REVERSE
+                        stdscr.addstr(by, bx, btn, attr)
+                    else:
+                        stdscr.addstr(by, bx, btn)
+                except curses.error:
+                    pass
+                bx += len(btn) + 4
 
-            if curses.has_colors():
-                stdscr.attroff(curses.color_pair(4) | curses.A_BOLD if current_focus == 0 else curses.color_pair(4))
-
-            # Position cursor in input field if focused
+            # Cursor into the field when focused
             if current_focus == 0:
                 cursor_x = input_x + 1 + min(len(display_text), input_width - 3)
-                if cursor_x < w - 1:
-                    stdscr.move(input_y, cursor_x)
+                try:
+                    stdscr.move(input_y, min(cursor_x, w - 2))
+                except curses.error:
+                    pass
 
-        # Horizontal menu (Cancel / OK)
-        menu_y = input_y + 3
-        options = ["Cancel", "OK"]
-
-        # Calculate spacing
-        button_width_cancel = len("Cancel") + 4
-        button_width_ok = len("OK") + 4
-        spacing = 6
-        total_width = button_width_cancel + spacing + button_width_ok
-        menu_x = max(2, (w - total_width) // 2)
-
-        # Draw Cancel button
-        if menu_y < h - 4:
-            cancel_text = " Cancel "
-            if current_focus == 1:
-                # Selected
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-
-                border = "─" * len(cancel_text)
-                stdscr.addstr(menu_y, menu_x, f"┌{border}┐")
-                stdscr.addstr(menu_y + 1, menu_x, f"│{cancel_text}│")
-                stdscr.addstr(menu_y + 2, menu_x, f"└{border}┘")
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-            else:
-                # Normal
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-                stdscr.addstr(menu_y + 1, menu_x, f" {cancel_text} ")
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
-
-        # Draw OK button
-        ok_x = menu_x + button_width_cancel + spacing
-        if menu_y < h - 4 and ok_x < w - button_width_ok:
-            ok_text = "  OK  "
-            if current_focus == 2:
-                # Selected
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-
-                border = "─" * len(ok_text)
-                stdscr.addstr(menu_y, ok_x, f"┌{border}┐")
-                stdscr.addstr(menu_y + 1, ok_x, f"│{ok_text}│")
-                stdscr.addstr(menu_y + 2, ok_x, f"└{border}┘")
-
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD | curses.A_REVERSE)
-            else:
-                # Normal
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-                stdscr.addstr(menu_y + 1, ok_x, f" {ok_text} ")
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
-
-        # Instructions
-        if current_focus == 0:
-            instructions = "Type password | Tab/↓: Move to buttons | Enter: Confirm"
-        else:
-            instructions = "←→: Navigate buttons | ↑/Tab: Back to input | Enter: Select"
-
-        if len(instructions) < w - 4:
-            instr_x = max(2, (w - len(instructions)) // 2)
-            if h - 2 >= 0:
-                if curses.has_colors():
-                    stdscr.attron(curses.color_pair(3))
-                stdscr.addstr(h - 2, instr_x, instructions)
-                if curses.has_colors():
-                    stdscr.attroff(curses.color_pair(3))
-
-        stdscr.refresh()
-
-        # Get user input
-        try:
+            stdscr.refresh()
             key = stdscr.getch()
-        except:
-            key = -1
 
-        if current_focus == 0:
-            # Input field focused
-            if key == curses.KEY_ENTER or key in [10, 13]:
-                # Enter in input field = submit (OK)
-                return user_input
-            elif key == 9 or key == curses.KEY_DOWN:  # Tab or Down arrow
-                current_focus = 1  # Move to Cancel button
-            elif key == curses.KEY_BACKSPACE or key == 127 or key == 8:
-                # Backspace
-                if user_input:
-                    user_input = user_input[:-1]
-            elif key == 27:  # Escape
+            if key == 27:  # Esc
                 return None
-            elif 32 <= key <= 126:  # Printable characters
-                user_input += chr(key)
-        else:
-            # Buttons focused
-            if key == curses.KEY_LEFT:
-                current_focus = 1  # Cancel
-            elif key == curses.KEY_RIGHT:
-                current_focus = 2  # OK
-            elif key == 9 or key == curses.KEY_UP:  # Tab or Up arrow
-                current_focus = 0  # Back to input field
-            elif key == curses.KEY_ENTER or key in [10, 13]:
+            elif key == ord('\t') or key == curses.KEY_DOWN:
+                current_focus = (current_focus + 1) % 3
+            elif key == curses.KEY_UP:
+                current_focus = (current_focus - 1) % 3
+            elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and current_focus in (1, 2):
+                current_focus = 3 - current_focus  # toggle Cancel <-> OK
+            elif key == curses.KEY_ENTER or key in (10, 13):
                 if current_focus == 1:
-                    return None  # Cancel
-                else:
-                    return user_input  # OK
-            elif key == 27:  # Escape
-                return None
+                    return None
+                # OK, or Enter in the field submits
+                return user_input if user_input else None
+            elif current_focus == 0:
+                if key in (curses.KEY_BACKSPACE, 127, 8):
+                    user_input = user_input[:-1]
+                elif 32 <= key <= 126:
+                    user_input += chr(key)
+    finally:
+        curses.curs_set(0)
 
 
 def show_horizontal_menu(title: str, options: List[str]) -> int:
@@ -778,35 +619,18 @@ def input_dialog(title: str, prompt: str, password: bool = False) -> Optional[st
 
 
 def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
-    """Scrollable read-only text screen. Enter/Esc/q closes it."""
+    """Framed scrollable read-only text screen. Enter/Esc/q closes it."""
     curses.curs_set(0)
-    if curses.has_colors():
-        curses.start_color()
-        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)    # title
-        curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # hint
+    _init_colors()
 
     top = 0
     while True:
-        stdscr.clear()
-        h, w = stdscr.getmaxyx()
-
-        # Centered single-line title box
-        label = f"  {title.upper()}  "
-        tw = len(label)
-        sx = max(0, (w - tw - 2) // 2)
-        if curses.has_colors():
-            stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-        try:
-            stdscr.addstr(0, sx, "╔" + "═" * tw + "╗")
-            stdscr.addstr(1, sx, "║" + label + "║")
-            stdscr.addstr(2, sx, "╚" + "═" * tw + "╝")
-        except curses.error:
-            pass
-        if curses.has_colors():
-            stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-
-        body_top = 4
-        body_h = max(1, h - body_top - 1)   # keep the last line for the hint
+        stdscr.erase()
+        scroll = len(lines) > 1  # recomputed against body below
+        y0, x0, body_h, body_w = _draw_frame(
+            stdscr, title,
+            "↑↓ PgUp/PgDn scroll   Enter/Esc — back" if scroll
+            else "Enter/Esc — back")
         max_top = max(0, len(lines) - body_h)
         top = min(max(0, top), max_top)
 
@@ -815,22 +639,9 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
             if li >= len(lines):
                 break
             try:
-                stdscr.addstr(body_top + i, 2, lines[li][:max(0, w - 3)])
+                stdscr.addstr(y0 + i, x0, lines[li][:max(0, body_w)])
             except curses.error:
                 pass
-
-        if len(lines) > body_h:
-            hint = "  ↑↓ PgUp/PgDn scroll    Enter/Esc/q — back"
-        else:
-            hint = "  Enter/Esc/q — back"
-        if curses.has_colors():
-            stdscr.attron(curses.color_pair(4))
-        try:
-            stdscr.addstr(h - 1, 0, hint[:max(0, w - 1)])
-        except curses.error:
-            pass
-        if curses.has_colors():
-            stdscr.attroff(curses.color_pair(4))
 
         stdscr.refresh()
 
@@ -864,27 +675,9 @@ def show_text_screen(title: str, lines: List[str]) -> None:
         press_enter_to_continue()
 
 
-def _draw_title_box(stdscr, title: str) -> None:
-    """Draw the standard centered single-line title box on rows 0-2."""
-    h, w = stdscr.getmaxyx()
-    label = f"  {title.upper()}  "
-    tw = len(label)
-    sx = max(0, (w - tw - 2) // 2)
-    if curses.has_colors():
-        stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-    try:
-        stdscr.addstr(0, sx, "╔" + "═" * tw + "╗")
-        stdscr.addstr(1, sx, "║" + label + "║")
-        stdscr.addstr(2, sx, "╚" + "═" * tw + "╝")
-    except curses.error:
-        pass
-    if curses.has_colors():
-        stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
-
-
 def show_wait_screen(title: str, message: str, fn, *args, **kwargs):
     """
-    Run a blocking function while showing a curses spinner screen.
+    Run a blocking function while showing a framed curses spinner screen.
 
     stdout/stderr of fn are captured so core print_* output cannot corrupt
     the curses display.
@@ -910,9 +703,7 @@ def show_wait_screen(title: str, message: str, fn, *args, **kwargs):
 
     def ui(stdscr):
         curses.curs_set(0)
-        if curses.has_colors():
-            curses.start_color()
-            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        _init_colors()
         stdscr.nodelay(True)
         spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         i = 0
@@ -920,11 +711,12 @@ def show_wait_screen(title: str, message: str, fn, *args, **kwargs):
         thread.start()
         while not state['done']:
             stdscr.erase()
-            h, w = stdscr.getmaxyx()
-            _draw_title_box(stdscr, title)
+            y0, x0, body_h, body_w = _draw_frame(stdscr, title)
+            w = stdscr.getmaxyx()[1]
+            text = f"{spinner[i % len(spinner)]} {message}"
             try:
-                stdscr.addstr(h // 2, max(0, (w - len(message) - 2) // 2),
-                              f"{spinner[i % len(spinner)]} {message}"[:w - 1])
+                stdscr.addstr(y0 + body_h // 2, max(x0, (w - len(text)) // 2),
+                              text[:max(0, body_w)])
             except curses.error:
                 pass
             stdscr.refresh()
@@ -943,7 +735,7 @@ def show_wait_screen(title: str, message: str, fn, *args, **kwargs):
 
 def show_progress_screen(title: str, worker) -> tuple:
     """
-    Run worker(progress) in a thread while drawing a curses progress screen.
+    Run worker(progress) in a thread while drawing a framed progress screen.
 
     worker receives `progress(percent, *lines)`: percent is 0-100 or None
     (indeterminate), lines are short status strings shown under the bar.
@@ -974,10 +766,7 @@ def show_progress_screen(title: str, worker) -> tuple:
 
     def ui(stdscr):
         curses.curs_set(0)
-        if curses.has_colors():
-            curses.start_color()
-            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
-            curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)
+        _init_colors()
         stdscr.nodelay(True)
         spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         i = 0
@@ -985,22 +774,24 @@ def show_progress_screen(title: str, worker) -> tuple:
         thread.start()
         while not state['done']:
             stdscr.erase()
-            h, w = stdscr.getmaxyx()
-            _draw_title_box(stdscr, title)
-            y = h // 2 - 1
+            y0, x0, body_h, body_w = _draw_frame(stdscr, title)
+            w = stdscr.getmaxyx()[1]
+            y = y0 + max(1, body_h // 2 - 1)
             pct = state['percent']
-            bar_w = max(10, min(50, w - 14))
+            bar_w = max(10, min(50, body_w - 10))
             try:
                 if pct is None:
-                    stdscr.addstr(y, max(0, (w - 12) // 2),
-                                  f"{spinner[i % len(spinner)]} working...")
+                    text = f"{spinner[i % len(spinner)]} working..."
+                    stdscr.addstr(y, max(x0, (w - len(text)) // 2), text)
                 else:
                     filled = int(bar_w * min(100, max(0, pct)) / 100)
                     bar = "█" * filled + "░" * (bar_w - filled)
                     line = f"[{bar}] {pct:3.0f}%"
-                    stdscr.addstr(y, max(0, (w - len(line)) // 2), line[:w - 1])
+                    stdscr.addstr(y, max(x0, (w - len(line)) // 2), line[:max(0, body_w)])
                 for j, ln in enumerate(state['lines'][:3]):
-                    stdscr.addstr(y + 2 + j, max(0, (w - len(ln)) // 2), str(ln)[:w - 1])
+                    s = str(ln)
+                    stdscr.addstr(y + 2 + j, max(x0, (w - len(s)) // 2),
+                                  s[:max(0, body_w)])
             except curses.error:
                 pass
             stdscr.refresh()
@@ -1019,44 +810,42 @@ def show_progress_screen(title: str, worker) -> tuple:
 def show_confirm_screen(title: str, lines: List[str], yes_label: str = "YES",
                         no_label: str = "NO") -> bool:
     """
-    Curses confirmation screen: info lines + horizontal NO/YES buttons.
+    Framed confirmation screen: info lines + < NO > < YES > buttons.
     NO is preselected. Esc/q = NO. Returns True only on explicit YES.
     """
     def ui(stdscr):
         curses.curs_set(0)
-        if curses.has_colors():
-            curses.start_color()
-            curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)
-            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        _init_colors()
         current = 0  # 0 = NO (safe default), 1 = YES
         while True:
             stdscr.erase()
-            h, w = stdscr.getmaxyx()
-            _draw_title_box(stdscr, title)
-            y = 4
+            y0, x0, body_h, body_w = _draw_frame(
+                stdscr, title, "←→ move   Enter select   Esc cancel")
+            w = stdscr.getmaxyx()[1]
+            y = y0 + 1
             for ln in lines:
-                if y >= h - 4:
+                if y >= y0 + body_h - 2:
                     break
                 try:
-                    stdscr.addstr(y, 2, str(ln)[:max(0, w - 3)])
+                    stdscr.addstr(y, x0 + 1, str(ln)[:max(0, body_w - 2)])
                 except curses.error:
                     pass
                 y += 1
-            labels = [f"  {no_label}  ", f"  {yes_label}  "]
-            total = len(labels[0]) + len(labels[1]) + 6
-            x = max(0, (w - total) // 2)
-            by = min(h - 2, y + 2)
-            for idx, lab in enumerate(labels):
+            buttons = [f"< {no_label} >", f"< {yes_label} >"]
+            total = sum(len(b) for b in buttons) + 6
+            bx = max(x0, (w - total) // 2)
+            by = min(y0 + body_h - 1, y + 1)
+            for idx, btn in enumerate(buttons):
                 try:
-                    if idx == current and curses.has_colors():
-                        stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
-                        stdscr.addstr(by, x, lab)
-                        stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                    if idx == current:
+                        attr = (curses.color_pair(1) | curses.A_BOLD) if curses.has_colors() \
+                            else curses.A_REVERSE
+                        stdscr.addstr(by, bx, btn, attr)
                     else:
-                        stdscr.addstr(by, x, lab)
+                        stdscr.addstr(by, bx, btn)
                 except curses.error:
                     pass
-                x += len(lab) + 6
+                bx += len(btn) + 6
             stdscr.refresh()
             key = stdscr.getch()
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT, ord('\t')):
@@ -1071,6 +860,179 @@ def show_confirm_screen(title: str, lines: List[str], yes_label: str = "YES",
     except Exception as e:
         print_error(f"Screen error: {e}")
         return False
+
+
+def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
+    """menuconfig-style settings screen (single curses session).
+
+    Each item is a dict:
+      {'type': 'bool'|'choice'|'string'|'int',
+       'label': str,
+       'get': callable() -> value,
+       'set': callable(value),
+       'help': str,                       # optional
+       'choices': [(value, label), ...]}  # for 'choice'
+    Values are applied immediately via set(); nothing persists across reboot.
+    """
+    curses.curs_set(0)
+    _init_colors()
+
+    def fmt(item) -> str:
+        kind = item['type']
+        if kind == 'bool':
+            return f"[{'*' if item['get']() else ' '}] {item['label']}"
+        if kind == 'choice':
+            cur = item['get']()
+            cur_label = next((lab for val, lab in item['choices'] if val == cur), str(cur))
+            return f"    {item['label']} ({cur_label})  --->"
+        # string / int
+        return f"    {item['label']} ({item['get']()})"
+
+    def inline_help(item):
+        stdscr.erase()
+        y0, x0, body_h, body_w = _draw_frame(stdscr, item['label'], "any key — back")
+        y = y0
+        for ln in item.get('help', 'No help available.').split('\n'):
+            if y >= y0 + body_h:
+                break
+            try:
+                stdscr.addstr(y, x0 + 1, ln[:max(0, body_w - 2)])
+            except curses.error:
+                pass
+            y += 1
+        stdscr.refresh()
+        stdscr.getch()
+
+    def inline_choice(item):
+        choices = item['choices']
+        cur_val = item['get']()
+        sel = next((i for i, (val, _) in enumerate(choices) if val == cur_val), 0)
+        while True:
+            stdscr.erase()
+            y0, x0, body_h, body_w = _draw_frame(
+                stdscr, item['label'], "↑↓ move   Enter select   Esc cancel")
+            for i, (val, lab) in enumerate(choices):
+                y = y0 + i
+                if y >= y0 + body_h:
+                    break
+                marker = "(X)" if val == cur_val else "( )"
+                line = f"  {marker} {lab}"
+                try:
+                    if i == sel and curses.has_colors():
+                        stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                        stdscr.addstr(y, x0 + 1, line[:max(0, body_w - 2)])
+                        stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                    else:
+                        stdscr.addstr(y, x0 + 1, line[:max(0, body_w - 2)])
+                except curses.error:
+                    pass
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key == curses.KEY_UP and sel > 0:
+                sel -= 1
+            elif key == curses.KEY_DOWN and sel < len(choices) - 1:
+                sel += 1
+            elif key in (ord('\n'), ord('\r')):
+                item['set'](choices[sel][0])
+                return
+            elif key in (27, ord('q'), ord('Q')):
+                return
+
+    def inline_edit(item):
+        digits_only = item['type'] == 'int'
+        buf = list(str(item['get']()))
+        curses.curs_set(1)
+        try:
+            while True:
+                stdscr.erase()
+                y0, x0, body_h, body_w = _draw_frame(
+                    stdscr, item['label'], "Enter save   Esc cancel   Backspace delete")
+                prompt = f"{item['label']}: "
+                text = ''.join(buf)
+                try:
+                    stdscr.addstr(y0 + body_h // 2, x0 + 1,
+                                  (prompt + text)[:max(0, body_w - 2)])
+                except curses.error:
+                    pass
+                stdscr.refresh()
+                key = stdscr.getch()
+                if key in (ord('\n'), ord('\r')):
+                    value = ''.join(buf)
+                    if digits_only:
+                        if not value.isdigit():
+                            continue
+                        item['set'](int(value))
+                    else:
+                        item['set'](value)
+                    return
+                elif key == 27:
+                    return
+                elif key in (curses.KEY_BACKSPACE, 127, 8):
+                    if buf:
+                        buf.pop()
+                elif 32 <= key <= 126:
+                    if not digits_only or chr(key).isdigit():
+                        buf.append(chr(key))
+        finally:
+            curses.curs_set(0)
+
+    current = 0
+    top = 0
+    while True:
+        stdscr.erase()
+        y0, x0, body_h, body_w = _draw_frame(
+            stdscr, title,
+            "↑↓ move   Space/Enter change   ? help   Esc back   (resets on reboot)")
+        y0 += 1  # breathing row under the top border
+        body_h = max(1, body_h - 1)
+        if current < top:
+            top = current
+        elif current >= top + body_h:
+            top = current - body_h + 1
+        top = max(0, min(top, max(0, len(items) - body_h)))
+
+        for i in range(body_h):
+            idx = top + i
+            if idx >= len(items):
+                break
+            line = f" {fmt(items[idx])} "
+            try:
+                if idx == current and curses.has_colors():
+                    stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                    stdscr.addstr(y0 + i, x0 + 1, line[:max(0, body_w - 2)])
+                    stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                else:
+                    stdscr.addstr(y0 + i, x0 + 1, line[:max(0, body_w - 2)])
+            except curses.error:
+                pass
+
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        item = items[current] if items else None
+        if key == curses.KEY_UP and current > 0:
+            current -= 1
+        elif key == curses.KEY_DOWN and current < len(items) - 1:
+            current += 1
+        elif key == ord('?') and item:
+            inline_help(item)
+        elif key in (ord(' '), ord('\n'), ord('\r')) and item:
+            if item['type'] == 'bool':
+                item['set'](not item['get']())
+            elif item['type'] == 'choice':
+                inline_choice(item)
+            elif item['type'] in ('string', 'int'):
+                inline_edit(item)
+        elif key in (27, ord('q'), ord('Q')):
+            return
+
+
+def show_settings_screen(title: str, items: List[dict]) -> None:
+    """Show a menuconfig-style settings screen (curses)."""
+    try:
+        curses.wrapper(show_settings_screen_curses, title, items)
+    except Exception as e:
+        print_error(f"Settings screen error: {e}")
 
 
 def press_enter_to_continue():
