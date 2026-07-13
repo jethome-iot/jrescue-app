@@ -354,7 +354,7 @@ For issues and questions:
 
 ## 📝 Version
 
-**Current version:** v1.3.3
+**Current version:** v1.3.6
 
 ## 🎯 Project Structure
 
