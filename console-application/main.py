@@ -451,15 +451,6 @@ def settings_menu():
                     "Applies immediately to all menus.",
         },
         {
-            'type': 'string',
-            'label': 'Firmware server',
-            'get': lambda: config.JETHOME_API_BASE,
-            'set': lambda v: setattr(config, 'JETHOME_API_BASE', v.rstrip('/')),
-            'help': "Base URL of the JetHome firmware API.\n"
-                    "Image lists and downloads come from\n"
-                    "<server>/api/devices/<id>/info.",
-        },
-        {
             'type': 'int',
             'label': 'Network timeout (s)',
             'get': lambda: config.NETWORK_TIMEOUT,
@@ -481,10 +472,15 @@ def settings_menu():
 def drop_to_shell():
     """Exit curses and run a root shell on this tty; the app resumes on exit."""
     clear_screen()
-    print("jrescue: type 'exit' to return to the menu\n")
+    print("═" * 60)
+    print(" jrescue shell — type 'exit' to return to the menu")
+    print("═" * 60)
     try:
         import subprocess
-        subprocess.call(['/bin/bash', '-l'])
+        # --norc/--noprofile so nothing overrides our visible prompt
+        env = dict(os.environ)
+        env['PS1'] = r'jrescue \w # '
+        subprocess.call(['/bin/bash', '--norc', '--noprofile', '-i'], env=env)
     except Exception as e:
         print_error(f"Shell failed: {e}")
 

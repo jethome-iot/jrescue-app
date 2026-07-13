@@ -254,54 +254,48 @@ def _draw_frame(stdscr, title: str, hint: str = "") -> tuple:
     if h < 6 or w < 20:  # degrade gracefully on tiny terminals
         return 0, 0, h, w
 
+    # Like the real menuconfig: a centered dialog of bounded width, not a
+    # full-terminal-width frame (which looks lopsided on wide terminals).
+    box_w = min(w - 2, 80)
+    box_l = max(0, (w - box_w) // 2)
+    box_r = box_l + box_w - 1
+
     frame_attr = (curses.color_pair(2) | curses.A_BOLD) if curses.has_colors() else 0
 
     label = f"[ {title} ]"
-    if len(label) > w - 6:
-        label = label[:w - 9] + "… ]"
+    if len(label) > box_w - 4:
+        label = label[:box_w - 7] + "… ]"
 
     try:
         stdscr.attron(frame_attr)
         # top border with embedded title
-        top = "┌" + "─" * (w - 2) + "┐"
-        stdscr.addstr(0, 0, top[:w - 1])
-        try:
-            stdscr.addstr(0, w - 1, "┐")
-        except curses.error:
-            pass
-        stdscr.addstr(0, max(1, (w - len(label)) // 2), label)
+        stdscr.addstr(0, box_l, "┌" + "─" * (box_w - 2) + "┐")
+        stdscr.addstr(0, box_l + max(1, (box_w - len(label)) // 2), label)
         # side borders
         bottom_border_y = h - 1
         hint_sep_y = h - 3 if hint else None
         for y in range(1, bottom_border_y):
-            stdscr.addstr(y, 0, "│")
-            try:
-                stdscr.addstr(y, w - 1, "│")
-            except curses.error:
-                pass
+            stdscr.addstr(y, box_l, "│")
+            stdscr.addstr(y, box_r, "│")
         if hint:
-            stdscr.addstr(hint_sep_y, 0, "├" + "─" * (w - 2))
-            try:
-                stdscr.addstr(hint_sep_y, w - 1, "┤")
-            except curses.error:
-                pass
+            stdscr.addstr(hint_sep_y, box_l, "├" + "─" * (box_w - 2) + "┤")
         # bottom border
         try:
-            stdscr.addstr(bottom_border_y, 0, "└" + "─" * (w - 2) + "┘")
+            stdscr.addstr(bottom_border_y, box_l, "└" + "─" * (box_w - 2) + "┘")
         except curses.error:
-            pass  # writing the last cell always raises after drawing
+            pass  # writing the terminal's last cell raises after drawing
         stdscr.attroff(frame_attr)
 
         if hint:
             hint_attr = curses.color_pair(4) if curses.has_colors() else 0
             stdscr.attron(hint_attr)
-            stdscr.addstr(h - 2, 2, hint[:max(0, w - 4)])
+            stdscr.addstr(h - 2, box_l + 2, hint[:max(0, box_w - 4)])
             stdscr.attroff(hint_attr)
     except curses.error:
         pass
 
     inner_h = (hint_sep_y if hint else bottom_border_y) - 1
-    return 1, 2, inner_h, w - 4
+    return 1, box_l + 2, inner_h, box_w - 4
 
 
 def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
@@ -357,11 +351,11 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
             except curses.error:
                 pass
 
-        # Scroll indicator for long lists
+        # Scroll indicator for long lists (top-right corner of the dialog box)
         if len(options) > body_h:
             pos = f"[{current_row + 1}/{len(options)}]"
             try:
-                stdscr.addstr(0, max(0, stdscr.getmaxyx()[1] - len(pos) - 3), pos)
+                stdscr.addstr(0, max(0, x0 + body_w - len(pos) - 1), pos)
             except curses.error:
                 pass
 
