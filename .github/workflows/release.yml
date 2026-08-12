@@ -56,7 +56,9 @@ jobs:
           grep -n '^APP_VERSION' "dist/$pkg/core/config.py"
           find "dist/$pkg" -name '__pycache__' -type d -prune -exec rm -rf {} +
           tar -C dist -czf "$pkg.tar.gz" "$pkg"
-          sha256sum "$pkg.tar.gz"
+          # Publish a checksum next to the tarball so on-device jrescue-update
+          # can verify the download before swapping the live app.
+          sha256sum "$pkg.tar.gz" | tee "$pkg.tar.gz.sha256"
 
       - name: Publish GitHub release
         env:
@@ -67,7 +69,7 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --latest=${{ steps.ancestry.outputs.on_master }} \
-            jrescue-app-*.tar.gz
+            jrescue-app-*.tar.gz jrescue-app-*.tar.gz.sha256
 
       - name: Update current version in README (commit to master)
         if: steps.ancestry.outputs.on_master == 'true'

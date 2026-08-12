@@ -20,11 +20,13 @@ import language
 # Import screen modules
 from screens import network, flash, info, reboot
 
-# Теперь добавляем core/ в path для импорта core/config
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'core'))
-
-# Import from core/
-import config as src_config
+import importlib.util as _ilu
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'core'))
+_core_config_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'core', 'config.py')
+_spec = _ilu.spec_from_file_location('rescue_core_config', _core_config_path)
+src_config = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(src_config)
 
 
 def initialize():
