@@ -25,6 +25,12 @@ image from the JetHome REST API, and flash it to eMMC. Three frontends share one
 - Boards: **J100 = D1**, **J200 = D2**, **J310 = D3**. Current target is **J100**
   (console + web; J100 has **no OLED hardware**). J310 later runs all three frontends
   from the same codebase.
+- **OLED framebuffer format is auto-detected via ioctl, never hardcoded**
+  (`oled-grid-application/display.py`): the vendor **5.15 `ssd1307fb`** driver is
+  **1 bpp, LSB = leftmost pixel** → pack with PIL rawmode `'1;R'`; a mainline DRM
+  **`ssd130x`** panel is **32 bpp XRGB**. Hardcoding 32bpp size onto the 1bpp buffer
+  SIGBUSes; using PIL's default MSB-first `tobytes()` on `ssd1307fb` mirrors every
+  8-px group.
 - Sibling repos: `../buildroot-recovery-build` (recovery image + u-boot WP patches),
   `../armbian-build` (main OS), `../jethome-tools` (burn-image conversion).
 

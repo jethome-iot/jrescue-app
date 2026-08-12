@@ -1,12 +1,23 @@
 """
-OLED Display Manager using Linux Framebuffer
-Works with kernel driver (ssd130x-i2c) managing the display via /dev/fb0
+OLED Display Manager using the Linux framebuffer (/dev/fb0).
+
+Adapts to whichever SSD130x kernel driver is present, reading geometry and
+pixel format from the framebuffer via ioctl (never hardcoded):
+  - legacy fbdev `ssd1307fb` (e.g. vendor 5.15): 1 bit/pixel, LSB = leftmost
+    pixel, so we pack with PIL rawmode '1;R' (reversed bit order);
+  - DRM `ssd130x` fbdev emulation (mainline): 32 bit/pixel XRGB.
 """
 
 import os
 import mmap
+import fcntl
+import struct
 from PIL import Image, ImageDraw, ImageFont
 import config
+
+# Linux framebuffer ioctls (include/uapi/linux/fb.h)
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
 
 
 class DisplayManager:
@@ -31,9 +42,26 @@ class DisplayManager:
             # Open framebuffer device
             self.fb_fd = os.open(self.fb_device, os.O_RDWR | os.O_SYNC)
 
-            # Framebuffer parameters (from kernel driver)
-            self.stride = 512  # bytes per line (128 pixels * 4 bytes/pixel)
-            self.bpp = 4       # bytes per pixel (32-bit BGRA)
+            # Framebuffer geometry/format is read from the kernel driver, not
+            # hardcoded: the legacy ssd1307fb driver exposes a 1 bit/pixel
+            # buffer (1024 bytes for 128x64), while a DRM ssd130x fbdev-emulated
+            # panel exposes 32 bit/pixel. mmapping a hardcoded 32bpp size onto a
+            # 1bpp buffer overruns it and the kernel kills us with SIGBUS.
+            vinfo = fcntl.ioctl(self.fb_fd, FBIOGET_VSCREENINFO, bytes(160))
+            v_xres, v_yres = struct.unpack_from('II', vinfo, 0)
+            self.bpp_bits = struct.unpack_from('I', vinfo, 24)[0]  # bits_per_pixel
+            if v_xres:
+                self.width = v_xres
+            if v_yres:
+                self.height = v_yres
+
+            finfo = fcntl.ioctl(self.fb_fd, FBIOGET_FSCREENINFO, bytes(80))
+            # fb_fix_screeninfo.line_length: after id[16] + smem_start(ulong=8) +
+            # smem_len(4)+type(4)+type_aux(4)+visual(4)+xpanstep/ypanstep/
+            # ywrapstep(2*3)+reserved(2) -> offset 48 on 64-bit.
+            self.stride = struct.unpack_from('I', finfo, 48)[0]
+            if not self.stride:  # fall back if the driver reports 0
+                self.stride = (self.width * max(self.bpp_bits, 1) + 7) // 8
             self.fb_size = self.stride * self.height
 
             # Memory map the framebuffer
@@ -161,27 +189,31 @@ class DisplayManager:
         return lines if lines else ['']
 
     def _update_display(self):
-        """Write PIL image to framebuffer (convert 1-bit to 32-bit BGRA)"""
+        """Write the PIL image to the framebuffer in its native pixel format."""
         try:
-            # Create raw framebuffer data (32-bit BGRA format)
-            raw_data = bytearray(self.fb_size)
-
-            # Convert 1-bit PIL image to 32-bit BGRA
-            for y in range(self.height):
-                for x in range(self.width):
-                    offset = y * self.stride + x * self.bpp
-                    pixel = self.image.getpixel((x, y))
-
-                    if pixel > 0:  # White pixel
-                        raw_data[offset + 0] = 255  # B
-                        raw_data[offset + 1] = 255  # G
-                        raw_data[offset + 2] = 255  # R
-                        raw_data[offset + 3] = 0    # A
-                    else:  # Black pixel
-                        raw_data[offset + 0] = 0    # B
-                        raw_data[offset + 1] = 0    # G
-                        raw_data[offset + 2] = 0    # R
-                        raw_data[offset + 3] = 0    # A
+            if self.bpp_bits == 1:
+                row_bytes = (self.width + 7) // 8
+                src = self.image.tobytes('raw', '1;R')
+                if self.stride == row_bytes:
+                    raw_data = src
+                else:
+                    # Driver reports a padded stride: pack row by row.
+                    raw_data = bytearray(self.fb_size)
+                    for y in range(self.height):
+                        raw_data[y * self.stride:y * self.stride + row_bytes] = \
+                            src[y * row_bytes:(y + 1) * row_bytes]
+            else:
+                bpp = max(self.bpp_bits // 8, 1)
+                raw_data = bytearray(self.fb_size)
+                px = self.image.load()
+                for y in range(self.height):
+                    row = y * self.stride
+                    for x in range(self.width):
+                        if px[x, y]:
+                            off = row + x * bpp
+                            raw_data[off + 0] = 255  # B
+                            raw_data[off + 1] = 255  # G
+                            raw_data[off + 2] = 255  # R
 
             # Write to framebuffer
             self.fb_mmap.seek(0)
