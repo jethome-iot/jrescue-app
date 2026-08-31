@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JetHub Wi-Fi Setup</title>
+<style>
+  :root {
+    --bg: #f2f3f5; --card: #ffffff; --fg: #1c1e21; --muted: #65676b;
+    --accent: #0a7cff; --accent-fg: #ffffff; --border: #d9dbe0;
+    --ok: #1a7f37; --warn: #b25000; --err: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #18191a; --card: #242526; --fg: #e4e6eb; --muted: #b0b3b8;
+      --accent: #2d88ff; --border: #3a3b3c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; min-height: 100vh;
+    padding: env(safe-area-inset-top) 12px 24px;
+  }
+  .wrap { width: 100%; max-width: 420px; }
+  header { text-align: center; padding: 24px 0 12px; }
+  header h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  header p { color: var(--muted); margin: 0; font-size: 0.9rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 18px; margin-top: 14px;
+  }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
+  input[type=text], input[type=password], select {
+    width: 100%; padding: 12px; font-size: 1rem; color: var(--fg);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .nets { list-style: none; margin: 0; padding: 0; }
+  .nets li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 10px; border-radius: 10px; cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .nets li:active, .nets li.sel { background: var(--bg); border-color: var(--accent); }
+  .nets .ssid { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nets .meta { color: var(--muted); font-size: 0.8rem; flex: none; margin-left: 10px; }
+  button {
+    width: 100%; padding: 13px; margin-top: 16px; font-size: 1rem; font-weight: 600;
+    color: var(--accent-fg); background: var(--accent); border: 0; border-radius: 10px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { color: var(--fg); background: transparent; border: 1px solid var(--border); }
+  .hint { color: var(--muted); font-size: 0.85rem; margin-top: 10px; }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  .ok { color: var(--ok); }
+  .big { font-size: 1.1rem; font-weight: 600; }
+  code { background: var(--bg); padding: 2px 6px; border-radius: 6px; }
+  .spin { display: inline-block; width: 18px; height: 18px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: sp 0.8s linear infinite;
+    vertical-align: middle; margin-right: 8px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>JetHub Recovery</h1>
+    <p>Connect this device to your Wi-Fi</p>
+  </header>
+
+  <!-- Screen 1: pick a network -->
+  <section id="scr-select" class="card">
+    <h2>Choose your Wi-Fi network</h2>
+    <ul id="net-list" class="nets"></ul>
+    <p id="net-loading" class="hint"><span class="spin"></span>Scanning…</p>
+
+    <label id="lbl-manual" for="manual-ssid" hidden>Network name (SSID)</label>
+    <input id="manual-ssid" type="text" autocapitalize="none" autocorrect="off"
+           spellcheck="false" placeholder="Enter network name" hidden>
+
+    <label id="lbl-pass" for="password" hidden>Wi-Fi password</label>
+    <input id="password" type="password" placeholder="Password" hidden>
+
+    <button id="btn-continue" disabled>Continue</button>
+    <button id="btn-manual" class="secondary" type="button">Enter network manually</button>
+    <p id="select-err" class="hint err" hidden></p>
+  </section>
+
+  <!-- Screen 2: confirm (single-radio warning) -->
+  <section id="scr-confirm" class="card" hidden>
+    <h2>Before you continue</h2>
+    <p>JetHub will now switch to <span class="big" id="confirm-ssid"></span>.</p>
+    <p class="warn">The <b id="confirm-ap"></b> network will close and your phone
+       will disconnect from it — that is expected.</p>
+    <p>Afterwards, reconnect your phone to your home Wi-Fi and open
+       <code id="confirm-url">http://jethub.local:8124</code> to continue.
+       If the device can't join, it will re-open its setup network so you can try again.</p>
+    <button id="btn-connect">Connect JetHub to Wi-Fi</button>
+    <button id="btn-back" class="secondary" type="button">Back</button>
+  </section>
+
+  <!-- Screen 3: done -->
+  <section id="scr-done" class="card" hidden>
+    <h2 class="ok">JetHub is connecting…</h2>
+    <p>It is joining <span class="big" id="done-ssid"></span> now.</p>
+    <ol>
+      <li>Reconnect your phone to your home Wi-Fi.</li>
+      <li>Open <code id="done-url">http://jethub.local:8124</code>.</li>
+    </ol>
+    <p class="hint">If nothing loads after a minute, the device could not join and
+       has re-opened its <b id="done-ap"></b> setup network — reconnect to it and try again.</p>
+  </section>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const REDISCOVER = "http://jethub.local:8124";
+let selected = null;      // {ssid, secured}
+let apName = "the setup";
+
+function show(screen) {
+  for (const s of ["scr-select", "scr-confirm", "scr-done"]) $(s).hidden = (s !== screen);
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch("/api/provision/status");
+    const d = await r.json();
+    if (d && d.ssid) { apName = d.ssid; }
+    if (d && d.mdns) {
+      const url = "http://" + d.mdns + ":8124";
+      $("confirm-url").textContent = url;
+      $("done-url").textContent = url;
+    }
+  } catch (e) { /* offline captive: keep defaults */ }
+}
+
+async function loadNetworks() {
+  try {
+    const r = await fetch("/api/provision/networks");
+    const d = await r.json();
+    renderNetworks((d && d.networks) || []);
+  } catch (e) {
+    renderNetworks([]);
+  }
+}
+
+function renderNetworks(nets) {
+  $("net-loading").hidden = true;
+  const list = $("net-list");
+  list.innerHTML = "";
+  if (!nets.length) { enableManual(); return; }
+  for (const n of nets) {
+    const secured = n.security && n.security !== "Open" && n.security !== "--";
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="ssid"></span><span class="meta"></span>';
+    li.querySelector(".ssid").textContent = n.ssid;
+    li.querySelector(".meta").textContent = (secured ? "🔒 " : "") + (n.signal || "");
+    li.onclick = () => pick(li, n.ssid, secured);
+    list.appendChild(li);
+  }
+}
+
+function pick(li, ssid, secured) {
+  for (const el of $("net-list").children) el.classList.remove("sel");
+  if (li) li.classList.add("sel");
+  $("manual-ssid").hidden = true; $("lbl-manual").hidden = true;
+  selected = { ssid, secured };
+  $("lbl-pass").hidden = !secured;
+  $("password").hidden = !secured;
+  $("password").value = "";
+  $("btn-continue").disabled = false;
+  if (secured) $("password").focus();
+}
+
+function enableManual() {
+  $("net-loading").hidden = true;
+  $("btn-manual").hidden = true;
+  $("lbl-manual").hidden = false; $("manual-ssid").hidden = false;
+  $("lbl-pass").hidden = false; $("password").hidden = false;
+  $("manual-ssid").oninput = () => {
+    selected = { ssid: $("manual-ssid").value.trim(), secured: true };
+    $("btn-continue").disabled = !selected.ssid;
+  };
+}
+
+$("btn-manual").onclick = enableManual;
+
+$("btn-continue").onclick = () => {
+  const err = $("select-err");
+  err.hidden = true;
+  if (!selected || !selected.ssid) { err.textContent = "Choose a network first."; err.hidden = false; return; }
+  $("confirm-ssid").textContent = selected.ssid;
+  $("done-ssid").textContent = selected.ssid;
+  $("confirm-ap").textContent = apName;
+  $("done-ap").textContent = apName;
+  show("scr-confirm");
+};
+
+$("btn-back").onclick = () => show("scr-select");
+
+$("btn-connect").onclick = () => {
+  const body = JSON.stringify({ ssid: selected.ssid, password: $("password").value || "" });
+  // The AP (and this page's server) vanish the instant the handoff starts, so
+  // fire-and-forget and show the "reconnect" screen locally — we can't wait.
+  try {
+    fetch("/api/provision/connect", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body
+    }).catch(() => {});
+  } catch (e) { /* ignore — connection will drop */ }
+  show("scr-done");
+};
+
+loadStatus();
+loadNetworks();
+</script>
+</body>
+</html>

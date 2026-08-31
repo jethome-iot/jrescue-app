@@ -30,6 +30,7 @@ from utils import (
 from network import get_network_handler
 from download import download_image_interactive
 from usb import list_usb_devices_interactive, USBHandler
+import ap
 
 
 def _output_lines(captured: str, limit: int = 40) -> list:
@@ -49,6 +50,8 @@ def network_setup_menu():
         ])
         return
 
+    ap_handler = ap.get_ap_handler()
+
     while True:
         # Current status goes into the curses menu title — there are no
         # plain-text interstitial screens in the console UI.
@@ -59,10 +62,13 @@ def network_setup_menu():
                 status_line = f"{status['ssid']} {status_line}"
         else:
             status_line = "not connected"
+        if ap_handler.is_ap_active():
+            status_line = f'{t("ap_on")} · {status_line}'
 
         options = [
             t("back_to_main"),
             t("connect_wifi"),
+            t("provision_ap"),
             t("test_connection")
         ]
 
@@ -77,6 +83,10 @@ def network_setup_menu():
             wifi_setup(network_handler)
 
         elif choice == 3:
+            # Raise the setup-AP and show how to provision from a phone
+            provision_ap()
+
+        elif choice == 4:
             # Test connectivity
             _, out = show_wait_screen(
                 t("test_connection"), "Testing connection...",
@@ -140,6 +150,56 @@ def wifi_setup(network_handler):
     else:
         show_text_screen("WiFi", [f"✗ Failed to connect to {ssid}", ""]
                          + _output_lines(out, limit=10))
+
+
+def provision_ap():
+    """Raise the Wi-Fi setup-AP so a phone can configure the network via the web portal.
+
+    The radio is single, so raising the AP takes it away from any current Wi-Fi.
+    The web portal (served on the AP at http://10.42.0.1) does the actual
+    scan/select/connect and tears the AP down once the home Wi-Fi is joined.
+    """
+    ap_handler = ap.get_ap_handler()
+
+    def bring_up():
+        if not ap_handler.is_ap_active():
+            ap_handler.start_ap()
+        # jrescue-ap-up writes the creds file early but waits for the (USB) radio
+        # to enumerate — poll briefly so we can show the SSID/PSK.
+        for _ in range(20):
+            if ap_handler.read_creds().get('ssid'):
+                break
+            time.sleep(0.5)
+        return ap_handler.read_creds()
+
+    creds, out = show_wait_screen(t("provision_ap"), t("ap_starting"), bring_up)
+    if not isinstance(creds, dict):
+        creds = {}
+
+    if not ap_handler.is_ap_active():
+        show_text_screen(t("provision_ap"),
+                         ["Failed to start the access point."] + _output_lines(out, 8))
+        return
+
+    ssid = creds.get('ssid') or 'jethub'
+    psk = creds.get('psk') or 'jethub123'
+    url = creds.get('url') or config.AP_URL
+
+    show_text_screen(t("provision_ap"), [
+        "Wi-Fi setup access point is ON.",
+        "",
+        "On your phone:",
+        f"  1. Join Wi-Fi network:  {ssid}",
+        f"     Password:            {psk}",
+        f"  2. Open in a browser:   {url}",
+        "",
+        "There, choose your home Wi-Fi and enter its",
+        "password. This device will join it and the",
+        "setup network will close — your phone will",
+        "disconnect (that is normal). Then reconnect",
+        "your phone to your home Wi-Fi and open",
+        f"http://{config.MDNS_HOSTNAME}:8124",
+    ])
 
 
 def _reboot_prompt():

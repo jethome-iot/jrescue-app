@@ -13,6 +13,8 @@ import mimetypes
 import os
 import socketserver
 import sys
+import threading
+import time
 import urllib.parse
 
 # Add current directory to path
@@ -21,6 +23,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # Local imports
 import config
 from api_handler import APIHandler
+import ap  # core/ap.py — on sys.path via config/api_handler import above
 
 class RescueWebHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for Rescue Web Application"""
@@ -169,6 +172,19 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
                 result = self.api_handler.get_network_test()
                 self.send_json_response(result)
 
+            # Setup-AP provisioning endpoints
+            elif path == '/api/network/ap/status':
+                result = self.api_handler.get_ap_status()
+                self.send_json_response(result)
+
+            elif path == '/api/provision/status':
+                result = self.api_handler.get_provision_status()
+                self.send_json_response(result)
+
+            elif path == '/api/provision/networks':
+                result = self.api_handler.get_provision_networks()
+                self.send_json_response(result)
+
             # Flash endpoints
             elif path == '/api/flash/images':
                 result = self.api_handler.get_flash_images()
@@ -231,6 +247,11 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
                 result = self.api_handler.post_wifi_connect(data)
                 self.send_json_response(result)
 
+            # Setup-AP provisioning: join home WiFi (drops the AP, rolls back on fail)
+            elif path == '/api/provision/connect':
+                result = self.api_handler.post_provision_connect(data)
+                self.send_json_response(result)
+
             # Ethernet connects automatically - no manual endpoint needed
 
             # Flash endpoints
@@ -289,6 +310,68 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
             import traceback
             traceback.print_exc()
             self.send_error_response(str(e), 500)
+class CaptivePortalHandler(RescueWebHandler):
+    """Serves the provisioning portal + captive redirects on the AP (:80)."""
+
+    def do_GET(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/api/'):
+            self.handle_api_get(path)
+            return
+        if path in ('/', '', '/portal.html'):
+            self.serve_static_file('/portal.html')
+            return
+        # Any OS captive probe (Apple/Android/Windows) or other path -> portal.
+        self.send_response(302)
+        self.send_header('Location', config.AP_URL + '/')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+
+_captive_server = None
+_captive_lock = threading.Lock()
+
+
+def _start_captive_server() -> None:
+    global _captive_server
+    with _captive_lock:
+        if _captive_server is not None:
+            return
+        try:
+            server = http.server.ThreadingHTTPServer(
+                (config.AP_ADDR, config.CAPTIVE_PORT), CaptivePortalHandler)
+        except OSError:
+            # AP address not up yet, or :80 busy — retry on the next tick.
+            return
+        _captive_server = server
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
+def _stop_captive_server() -> None:
+    global _captive_server
+    with _captive_lock:
+        if _captive_server is None:
+            return
+        try:
+            _captive_server.shutdown()
+            _captive_server.server_close()
+        except Exception:
+            pass
+        _captive_server = None
+
+
+def captive_portal_watcher() -> None:
+    """Start/stop the :80 captive server to track the setup-AP's lifecycle."""
+    ap_handler = ap.get_ap_handler()
+    while True:
+        try:
+            if ap_handler.is_ap_active():
+                _start_captive_server()
+            else:
+                _stop_captive_server()
+        except Exception:
+            pass
+        time.sleep(3)
 
 
 def check_root() -> None:
@@ -342,6 +425,9 @@ def main() -> None:
                 print()
                 print("Press Ctrl+C to stop")
                 print()
+
+            # Watch the setup-AP and run the captive portal (:80) while it's up.
+            threading.Thread(target=captive_portal_watcher, daemon=True).start()
 
             httpd.serve_forever()
 

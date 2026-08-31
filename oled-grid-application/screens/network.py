@@ -26,7 +26,7 @@ def network_menu(menu):
     Returns:
         -1 if HOME pressed, None otherwise
     """
-    items = [t("net_wifi"), t("net_test")]
+    items = [t("net_wifi"), t("net_ap"), t("net_test")]
 
     while True:
         # Use select_from_list instead of show_menu for scrolling support and consistency
@@ -41,6 +41,10 @@ def network_menu(menu):
             if result == -1:
                 return -1  # Propagate HOME to main menu
         elif choice == 1:
+            result = ap_setup(menu)
+            if result == -1:
+                return -1  # Propagate HOME to main menu
+        elif choice == 2:
             result = test_connectivity(menu)
             if result == -1:
                 return -1  # Propagate HOME to main menu
@@ -138,6 +142,95 @@ def wifi_setup(menu):
             time.sleep(2)  # Show success message for 2 seconds
         else:
             menu.show_message(t("wifi_failed"), f"{ssid[:18]}")
+
+
+def ap_setup(menu):
+    """
+    Raise the Wi-Fi setup-AP and show a join-QR so a phone can provision the
+    device via the web portal (http://10.42.0.1). Scanning the QR joins the AP;
+    the phone's captive portal then pops the setup page.
+
+    Returns:
+        -1 if HOME pressed, None otherwise
+    """
+    import ap as ap_module
+    from input import KEY_HOME
+
+    handler = ap_module.get_ap_handler()
+
+    menu.show_working(t("net_ap"), t("ap_start"), 0)
+    if not handler.is_ap_active():
+        handler.start_ap()
+
+    # jrescue-ap-up writes the creds file early but waits for the (USB) radio to
+    # enumerate — poll briefly so we can encode the SSID/PSK into the QR.
+    creds = {}
+    for _ in range(20):
+        creds = handler.read_creds()
+        if creds.get('ssid'):
+            break
+        time.sleep(0.5)
+
+    if not handler.is_ap_active():
+        result = menu.show_message(t("error"), t("ap_fail"))
+        return -1 if result == -1 else None
+
+    ssid = creds.get('ssid') or 'jethub'
+    psk = creds.get('psk') or 'jethub123'
+    url = (creds.get('url') or 'http://10.42.0.1').replace('http://', '')
+
+    _draw_ap_qr(menu.display, ssid, psk, url)
+
+    # Hold the QR on screen until any key; HOME propagates to the main menu.
+    key = menu.input.wait_for_key()
+    return -1 if key == KEY_HOME else None
+
+
+def _draw_ap_qr(display, ssid, psk, url):
+    """Render a Wi-Fi join-QR (left) + SSID/PSK/URL text (right) on the OLED.
+
+    The QR encodes a standard WIFI: payload so a phone camera joins the AP
+    directly. It is drawn dark-on-light (light = lit OLED pixels) because most
+    scanners expect a light background; a plain text panel is shown if the
+    optional `qrcode` package is unavailable.
+    """
+    from PIL import Image, ImageDraw
+
+    display.image = Image.new('1', (display.width, display.height), color=0)
+    display.draw = ImageDraw.Draw(display.image)
+    d = display.draw
+    font = display.font_small
+
+    qr_size = 0
+    try:
+        import qrcode
+        payload = "WIFI:T:WPA;S:%s;P:%s;;" % (ssid, psk)
+        qr = qrcode.QRCode(border=1, box_size=1)
+        qr.add_data(payload)
+        qr.make(fit=True)
+        matrix = qr.get_matrix()
+        n = len(matrix)
+        scale = max(1, min(display.height, 64) // n)
+        qr_size = n * scale
+        # Light (lit) background so the dark modules read on the OLED.
+        d.rectangle((0, 0, qr_size - 1, qr_size - 1), fill=1)
+        for ry, row in enumerate(matrix):
+            for rx, bit in enumerate(row):
+                if bit:
+                    x0 = rx * scale
+                    y0 = ry * scale
+                    d.rectangle((x0, y0, x0 + scale - 1, y0 + scale - 1), fill=0)
+    except Exception:
+        qr_size = 0  # qrcode missing or failed — fall back to text only
+
+    tx = qr_size + 3 if qr_size else 2
+    avail_chars = max(1, (display.width - tx) // 7)
+    y = 1
+    for line in (ssid, psk, url):
+        d.text((tx, y), display._truncate(str(line), avail_chars), font=font, fill=1)
+        y += 13
+
+    display._update_display()
 
 
 def test_connectivity(menu):

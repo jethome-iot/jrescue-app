@@ -20,9 +20,13 @@ TRANSLATIONS = {
         "net_title": "Сеть",
         "net_test": "Статус",
         "net_wifi": "WiFi",
+        "net_ap": "Смартфон",
         "net_ethernet": "Ethernet",
         "net_ip": "IP адрес",
         "net_back": "Назад",
+        "ap_start": "Запуск AP",
+        "ap_fail": "AP не создан",
+        "ap_scan_qr": "Скан QR",
 
         # WiFi menu
         "wifi_title": "WiFi",
@@ -130,9 +134,13 @@ TRANSLATIONS = {
         "net_title": "Network",
         "net_test": "Status",
         "net_wifi": "WiFi",
+        "net_ap": "Phone AP",
         "net_ethernet": "Ethernet",
         "net_ip": "IP Address",
         "net_back": "Back",
+        "ap_start": "Starting AP",
+        "ap_fail": "AP failed",
+        "ap_scan_qr": "Scan QR",
 
         # WiFi menu
         "wifi_title": "WiFi",

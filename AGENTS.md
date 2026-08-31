@@ -94,11 +94,11 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
 - **No `__init__.py`** except `oled-grid-application/screens/` (the only real
   package). Do not re-add them — modules are imported bare via `sys.path`.
 - **Buildroot side:** `package/jrescue-app/Config.in` `select`s all runtime deps
-  (python3 + curses/ssl/xz/zlib, Pillow/freetype/dejavu, evdev, ncurses, pv) —
-  defconfigs only set `BR2_PACKAGE_JRESCUE_APP=y`. NetworkManager/dnsmasq/wpa stay
-  in the defconfig (system stack). `WPA_SUPPLICANT_AP_SUPPORT` + `DNSMASQ` are
-  enabled for the planned Wi-Fi AP provisioning (hotspot + QR + captive portal —
-  designed, not yet implemented in the app).
+  (python3 + curses/ssl/xz/zlib, Pillow/freetype/dejavu, evdev, ncurses, pv, plus
+  the Wi-Fi setup-AP stack: `HOSTAPD`(+`_DRIVER_NL80211`), `DNSMASQ`,
+  `UTIL_LINUX_RFKILL`, `PYTHON_QRCODE`, `AVAHI`(+`_DAEMON`)) — defconfigs only set
+  `BR2_PACKAGE_JRESCUE_APP=y`. NetworkManager + wpa_supplicant stay in the
+  defconfig (system stack). See **Wi-Fi setup-AP provisioning** below.
 
 ## Flash safety (CRITICAL)
 
@@ -114,6 +114,47 @@ recovery slots and brick the recovery path itself.
 - It assumes a **full-disk source image** built with `OFFSET=336` (image byte X → eMMC
   byte X). Set `RECOVERY_PROTECT_MB = 0` only for non-recovery targets (blank SD card).
 - `SKIP_MOUNT_CHECK` must stay **`False`** in *every* `config.py` (shadowing — see above).
+
+## Wi-Fi setup-AP provisioning
+
+Router-style first run: with no ethernet the device raises its own Wi-Fi AP; a
+phone joins it, a captive web portal collects the home Wi-Fi credentials, the
+device joins that network and the AP is torn down. Ethernet present at boot → no
+AP. On join failure → roll back to the AP.
+
+**The radio is single — AP and STA are mutually exclusive (sequential).** The
+phone WILL disconnect the instant the handoff starts; the portal warns and points
+at `http://jethub.local:8124` (avahi/mDNS) for re-discovery. Scan the air BEFORE
+raising the AP (cached to `/run/jrescue/wifi-scan.txt`). The AP is **hostapd-
+driven, not `nmcli hotspot`**, because the RTL8821CU vendor driver brings
+NM/wpa_supplicant APs up **OPEN**.
+
+- **System** (buildroot overlay `usr/bin/` + `usr/lib/systemd/system/`):
+  `jrescue-netdecide.service` (boot decision: ethernet-carrier or wifi-connected →
+  nothing; else scan + `systemctl start jrescue-ap.service`; globally enabled),
+  `jrescue-ap.service` (**no `[Install]`** — started only by the decider or the
+  app), `jrescue-ap-up` (rfkill, `nmcli dev set managed no`, `10.42.0.1/24`,
+  dnsmasq DHCP + captive `--address=/#/`, `exec hostapd`), `jrescue-ap-down`
+  (ExecStopPost: flush IP, `managed yes`), `jrescue-eth-carrier`. The two halves
+  talk via `systemctl` + `/run/jrescue/{ap-creds.txt,wifi-scan.txt}`.
+- **App** `core/ap.py: APHandler` — `start_ap`/`stop_ap`, `provision(ssid,psk)`
+  (stop AP → `nmcli --wait` connect → verify **IP AND pingable gateway** → on
+  failure delete the profile + re-raise AP), `status()`. `web-application/main.py`
+  runs a second captive HTTP server on **`10.42.0.1:80`** *only while the AP is up*
+  (OS captive probes only hit :80) serving `static/portal.html`; endpoints
+  `/api/provision/{networks,connect,status}` + `/api/network/ap/status`. Console
+  `provision_ap()` and OLED `screens/network.py: ap_setup` (join-QR via
+  python-qrcode) surface SSID/PSK/URL.
+
+AP creds are the **static** `jethub`/`jethub123` (WPA2) for now — a per-device
+`sha256(mac)` scheme was considered and deferred. The web API stays
+unauthenticated; WPA2 + tearing the AP down on STA success bound the exposure.
+`AP_*` constants live in `core/config.py` **and** are mirrored in
+`oled-grid-application/config.py` (shadowing — `core/ap.py`'s `import config`
+resolves to the OLED copy under the OLED app). **Hardware-unverified:** whether
+RTL8821CU actually beacons WPA2 under hostapd (the whole premise — if it won't,
+set `country_code`/`ieee80211d` in `jrescue-ap.conf`), and single-radio handoff
+release timing.
 
 ## Conventions
 
@@ -143,13 +184,9 @@ recovery slots and brick the recovery path itself.
   by default). Should be vendored into `static/`.
 - Autostart units live in the buildroot overlay (`jrescue-console@.service` per-tty,
   `jrescue-web.service` global, `jrescue-oled.service` J310-only wants-symlink).
-- **Wi-Fi AP provisioning** (board raises a hotspot, phone joins via a QR printed on
-  the UART console, captive portal collects the home-network password) is fully
-  designed but not implemented; buildroot prerequisites are already in the defconfig.
-  Key constraints from the design: the radio is single (AP↔STA strictly sequential —
-  scan BEFORE raising the AP), success = IP **and** gateway reachable, always roll
-  back to the AP on failure. Current Wi-Fi hardware focus: Realtek RTL8822CS via
-  `rtw88` (mac80211).
+- **Wi-Fi setup-AP provisioning** is now **implemented** (see its section above) —
+  not hardware-verified end to end. The web `portal.html` is self-contained (no
+  CDN); the main `index.html` still loads Bootstrap from a CDN.
 - A larger modernization (single daemon backend, RAUC-based recovery self-update,
   download checksum/signature verification — note: the fw API's `hash` field is a
   PGP signature) is planned but deferred.
