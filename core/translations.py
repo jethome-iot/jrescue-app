@@ -335,27 +335,27 @@ def select_language_interactive():
         from utils import show_menu
 
         languages = [
-            ("en", t("language_english")),
             ("ru", t("language_russian")),
+            ("en", t("language_english")),
         ]
         choice = show_menu(t("select_language"), [name for _, name in languages])
         if 1 <= choice <= len(languages):
             return languages[choice - 1][0]
-        return "en"
+        return "ru"
 
     except Exception:
         # Fallback to simple menu
         print("\n" + "=" * 60)
         print(t("select_language").center(60))
         print("=" * 60 + "\n")
-        print(f"  1. {t('language_english')}")
-        print(f"  2. {t('language_russian')}")
+        print(f"  1. {t('language_russian')}")
+        print(f"  2. {t('language_english')}")
         print()
 
         try:
             choice = input("Choice / Выбор: ").strip()
             if choice == "2":
-                return "ru"
-            return "en"
+                return "en"
+            return "ru"
         except (KeyboardInterrupt, EOFError):
-            return "en"
+            return "ru"

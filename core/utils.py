@@ -298,7 +298,8 @@ def _draw_frame(stdscr, title: str, hint: str = "") -> tuple:
     return 1, box_l + 2, inner_h, box_w - 4
 
 
-def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
+def show_menu_interactive_curses(stdscr, title: str, options: List[str],
+                                 title_fn=None, refresh_ms: int = 2000) -> int:
     """
     Interactive menu using curses (arrow keys navigation)
 
@@ -306,6 +307,10 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
         stdscr: Curses screen object
         title: Menu title
         options: List of menu options
+        title_fn: optional callable returning a fresh title string; when given,
+            the title is re-rendered every refresh_ms (live status/IP) without a
+            keypress. Only called on refresh ticks, never per keystroke.
+        refresh_ms: live-refresh interval in ms (used only with title_fn)
 
     Returns:
         Selected option number (1-based) or 0 if cancelled
@@ -316,12 +321,16 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
     current_row = 0
     top = 0
 
+    cur_title = title_fn() if title_fn else title
+    if title_fn:
+        stdscr.timeout(refresh_ms)  # getch returns -1 every refresh_ms
+
     while True:
         stdscr.erase()
         # menuconfig-style: full-screen frame, compact left-aligned list,
         # scrolling for long lists. No syscalls in the draw loop.
         y0, x0, body_h, body_w = _draw_frame(
-            stdscr, title, "↑↓ move   Enter select   1-9 jump   Esc back")
+            stdscr, cur_title, "↑↓ move   Enter select   1-9 jump   Esc back")
         y0 += 1  # breathing row under the top border
         body_h = max(1, body_h - 1)
 
@@ -364,6 +373,10 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str]) -> int:
         # Get user input
         key = stdscr.getch()
 
+        if key == -1:  # refresh tick — recompute the live title and redraw
+            if title_fn:
+                cur_title = title_fn()
+            continue
         if key == curses.KEY_UP and current_row > 0:
             current_row -= 1
         elif key == curses.KEY_DOWN and current_row < len(options) - 1:
@@ -463,19 +476,24 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
                 return digit
 
 
-def show_menu(title: str, options: List[str]) -> int:
+def show_menu(title: str, options: List[str], title_fn=None,
+              refresh_ms: int = 2000) -> int:
     """
     Display an arrow-key menu (curses) and return the choice.
 
     Args:
         title: Menu title
         options: List of menu options
+        title_fn: optional callable returning a fresh title; when given, the
+            title refreshes live every refresh_ms (e.g. IP / connection status)
+        refresh_ms: live-refresh interval in ms (used only with title_fn)
 
     Returns:
         Selected option number (1-based), or 0 if cancelled.
     """
     try:
-        return curses.wrapper(show_menu_interactive_curses, title, options)
+        return curses.wrapper(show_menu_interactive_curses, title, options,
+                              title_fn, refresh_ms)
     except Exception as e:
         print_error(f"Menu error: {e}")
         return 0
@@ -612,10 +630,19 @@ def input_dialog(title: str, prompt: str, password: bool = False) -> Optional[st
         return None
 
 
-def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
-    """Framed scrollable read-only text screen. Enter/Esc/q closes it."""
+def show_text_screen_curses(stdscr, title: str, lines: List[str],
+                            refresh_fn=None, refresh_ms: int = 2000) -> None:
+    """Framed scrollable read-only text screen. Enter/Esc/q closes it.
+
+    refresh_fn: optional callable returning fresh lines; when given, the content
+    re-collects every refresh_ms (live IP / status) while the scroll position is
+    kept. Only called on refresh ticks, never per keystroke.
+    """
     curses.curs_set(0)
     _init_colors()
+
+    if refresh_fn:
+        stdscr.timeout(refresh_ms)  # getch returns -1 every refresh_ms
 
     top = 0
     while True:
@@ -640,6 +667,15 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
         stdscr.refresh()
 
         key = stdscr.getch()
+        if key == -1:  # refresh tick — re-collect the lines, keep scroll
+            if refresh_fn:
+                try:
+                    new_lines = refresh_fn()
+                    if new_lines:
+                        lines = new_lines
+                except Exception:
+                    pass
+            continue
         if key in (ord('\n'), ord('\r'), 27, ord('q'), ord('Q')):
             return
         elif key == curses.KEY_UP:
@@ -656,10 +692,15 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str]) -> None:
             top = max_top
 
 
-def show_text_screen(title: str, lines: List[str]) -> None:
-    """Show a scrollable read-only text screen (curses)."""
+def show_text_screen(title: str, lines: List[str], refresh_fn=None,
+                     refresh_ms: int = 2000) -> None:
+    """Show a scrollable read-only text screen (curses).
+
+    refresh_fn: optional callable returning fresh lines for live updates
+    (e.g. system info / IP address); refreshes every refresh_ms.
+    """
     try:
-        curses.wrapper(show_text_screen_curses, title, lines)
+        curses.wrapper(show_text_screen_curses, title, lines, refresh_fn, refresh_ms)
     except Exception as e:
         # Last-resort plain output so information is never lost.
         print_error(f"Screen error: {e}")

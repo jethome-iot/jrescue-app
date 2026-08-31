@@ -52,19 +52,21 @@ def network_setup_menu():
 
     ap_handler = ap.get_ap_handler()
 
-    while True:
-        # Current status goes into the curses menu title — there are no
-        # plain-text interstitial screens in the console UI.
+    def title_fn():
+        # Live status in the menu title (refreshes every ~2s without a keypress),
+        # so plugging/unplugging a cable or connecting Wi-Fi shows immediately.
         status = network_handler.get_connection_status()
         if status['connected']:
-            status_line = status['ip'] or status['interface'] or "connected"
+            line = status['ip'] or status['interface'] or "connected"
             if status['ssid']:
-                status_line = f"{status['ssid']} {status_line}"
+                line = f"{status['ssid']} {line}"
         else:
-            status_line = "not connected"
+            line = "not connected"
         if ap_handler.is_ap_active():
-            status_line = f'{t("ap_on")} · {status_line}'
+            line = f'{t("ap_on")} · {line}'
+        return f'{t("network_options")} · {line}'
 
+    while True:
         options = [
             t("back_to_main"),
             t("connect_wifi"),
@@ -72,7 +74,7 @@ def network_setup_menu():
             t("test_connection")
         ]
 
-        choice = show_menu(f'{t("network_options")} · {status_line}', options)
+        choice = show_menu(title_fn(), options, title_fn=title_fn)
 
         if choice == 0 or choice == 1:
             # Cancelled or Back
@@ -495,7 +497,8 @@ def system_info_menu():
     lines, _ = show_wait_screen(t("system_info"), "Collecting system info...", collect)
     if isinstance(lines, Exception):
         lines = [f"Failed to collect system info: {lines}"]
-    show_text_screen("SYSTEM INFORMATION", lines)
+    # Live-refresh so the IP/network fields track cable plug/unplug in real time.
+    show_text_screen("SYSTEM INFORMATION", lines, refresh_fn=collect, refresh_ms=2000)
 
 
 def settings_menu():
@@ -504,7 +507,7 @@ def settings_menu():
         {
             'type': 'choice',
             'label': 'Language',
-            'choices': [('en', 'English'), ('ru', 'Русский')],
+            'choices': [('ru', 'Русский'), ('en', 'English')],
             'get': app_locale.get_language,
             'set': app_locale.set_language,
             'help': "Interface language for the console application.\n"
@@ -529,42 +532,28 @@ def settings_menu():
     show_settings_screen(t("settings"), items)
 
 
-def drop_to_shell():
-    """Exit curses and run a root shell on this tty; the app resumes on exit."""
-    clear_screen()
-    print("═" * 60)
-    print(" jrescue shell — type 'exit' to return to the menu")
-    print("═" * 60)
-    try:
-        import subprocess
-        # --norc/--noprofile so nothing overrides our visible prompt
-        env = dict(os.environ)
-        env['PS1'] = r'jrescue \w # '
-        subprocess.call(['/bin/bash', '--norc', '--noprofile', '-i'], env=env)
-    except Exception as e:
-        print_error(f"Shell failed: {e}")
-
-
 def main_menu():
     """Main menu loop"""
-    while True:
-        # Web UI address lives in the menu title so it is always visible
-        # without a plain-text interstitial print.
-        web_port = 8124
+    web_port = 8124
+
+    def title_fn():
+        # Live Web UI address in the title (refreshes ~2s), so the IP appears/
+        # updates as the network comes up without leaving the menu.
         title = t("main_menu")
         if check_web_app_status("localhost", web_port):
             local_ip = get_local_ip() or "localhost"
             title = f"{title} · http://{local_ip}:{web_port}"
+        return title
 
+    while True:
         options = [
             t("network_setup"),
             t("flash_image"),
             t("system_info"),
             t("settings"),
-            t("shell")
         ]
 
-        choice = show_menu(title, options)
+        choice = show_menu(title_fn(), options, title_fn=title_fn)
 
         if choice == 0:
             continue
@@ -580,9 +569,6 @@ def main_menu():
 
         elif choice == 4:
             settings_menu()
-
-        elif choice == 5:
-            drop_to_shell()
 
 
 def cleanup_old_temp_dir():
