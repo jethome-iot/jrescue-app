@@ -14,8 +14,12 @@ name: Release
 # the same way but are NOT marked "Latest" and do not touch master's README.
 #
 # To cut a release:
-#   1. commit everything, then: git tag vX.Y.Z && git push origin <branch> vX.Y.Z
-#   2. bump JRESCUE_APP_VERSION in the buildroot recipe to X.Y.Z
+#   commit everything, then: git tag vX.Y.Z && git push origin <branch> vX.Y.Z
+#
+# For a release tagged on master, the `bump-recipe` job then bumps
+# JRESCUE_APP_VERSION in buildroot-recovery-build's jrescue-app.mk automatically
+# (mirrors the bump-tools job over there). It needs a BUILDROOT_BUMP_TOKEN secret
+# — a token with contents:write on jethome-iot/buildroot-recovery-build.
 
 on:
   push:
@@ -28,6 +32,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      on_master: ${{ steps.ancestry.outputs.on_master }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -84,3 +90,43 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "README: current version ${GITHUB_REF_NAME}" README.md
           git push origin master
+
+  bump-recipe:
+    needs: release
+    if: needs.release.outputs.on_master == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+      RECIPE: buildroot-external/package/jrescue-app/jrescue-app.mk
+      BR_BRANCH: main
+    steps:
+      - name: Check out buildroot-recovery-build
+        uses: actions/checkout@v7
+        with:
+          repository: jethome-iot/buildroot-recovery-build
+          ref: main
+          token: ${{ secrets.BUILDROOT_BUMP_TOKEN }}
+          path: buildroot-recovery-build
+
+      - name: Bump JRESCUE_APP_VERSION
+        working-directory: buildroot-recovery-build
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad tag '$TAG'"; exit 1; }
+          ver="${TAG#v}"
+          sed -i "s|^JRESCUE_APP_VERSION = .*|JRESCUE_APP_VERSION = $ver|" "$RECIPE"
+          grep -qx "JRESCUE_APP_VERSION = $ver" "$RECIPE" \
+            || { echo "::error::JRESCUE_APP_VERSION not rewritten"; exit 1; }
+
+      - name: Commit and push
+        working-directory: buildroot-recovery-build
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "recipe already at $TAG, nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "jrescue-app: bump to ${TAG#v}"
+          git push origin "HEAD:$BR_BRANCH"
