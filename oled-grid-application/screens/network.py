@@ -26,7 +26,7 @@ def network_menu(menu):
     Returns:
         -1 if HOME pressed, None otherwise
     """
-    items = [t("net_wifi"), t("net_test")]
+    items = [t("net_wifi"), t("net_ap"), t("net_test")]
 
     while True:
         # Use select_from_list instead of show_menu for scrolling support and consistency
@@ -41,6 +41,10 @@ def network_menu(menu):
             if result == -1:
                 return -1  # Propagate HOME to main menu
         elif choice == 1:
+            result = ap_setup(menu)
+            if result == -1:
+                return -1  # Propagate HOME to main menu
+        elif choice == 2:
             result = test_connectivity(menu)
             if result == -1:
                 return -1  # Propagate HOME to main menu
@@ -138,6 +142,47 @@ def wifi_setup(menu):
             time.sleep(2)  # Show success message for 2 seconds
         else:
             menu.show_message(t("wifi_failed"), f"{ssid[:18]}")
+
+
+def ap_setup(menu):
+    """
+    Raise the Wi-Fi setup-AP and show how to provision from a phone: join the AP
+    with the shown SSID/password, then open the web portal at http://10.42.0.1 to
+    pick the home Wi-Fi. (No QR — it's not legible on the 0.96" panel; the text is.)
+
+    Returns:
+        -1 if HOME pressed, None otherwise
+    """
+    import ap as ap_module
+
+    handler = ap_module.get_ap_handler()
+
+    menu.show_working(t("net_ap"), t("ap_start"), 0)
+    if not handler.is_ap_active():
+        handler.start_ap()
+
+    # jrescue-ap-up writes the creds file early but waits for the (USB) radio to
+    # enumerate — poll briefly so we can show the SSID/PSK.
+    creds = {}
+    for _ in range(20):
+        creds = handler.read_creds()
+        if creds.get('ssid'):
+            break
+        time.sleep(0.5)
+
+    if not handler.is_ap_active():
+        result = menu.show_message(t("error"), t("ap_fail"))
+        return -1 if result == -1 else None
+
+    ssid = creds.get('ssid') or 'jethub'
+    psk = creds.get('psk') or 'jethub123'
+    addr = creds.get('addr') or '10.42.0.1'
+
+    # show_message waits for a key and returns -1 on HOME.
+    result = menu.show_message(t("net_ap"), "WiFi: %s\nKey: %s\n%s" % (ssid, psk, addr))
+    return -1 if result == -1 else None
+
+    display._update_display()
 
 
 def test_connectivity(menu):

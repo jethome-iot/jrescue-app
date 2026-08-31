@@ -23,6 +23,7 @@ import network
 import download
 import flash
 import usb
+import ap
 from utils import get_system_info, check_disk_space, get_device_size, format_bytes
 
 # Global state for long-running operations
@@ -43,26 +44,45 @@ operation_state = {
         'error': None,
         'status': 'idle'  # idle, flashing, complete
     }
+    # NB: provisioning has no entry here — its live state is the single source of
+    # truth in ap_handler (phase), read directly by the provision endpoints.
 }
+
+# Phases that mean an AP->STA handoff is in flight (ap_handler.phase).
+_PROVISIONING_PHASES = (ap.PHASE_STOPPING_AP, ap.PHASE_CONNECTING, ap.PHASE_VERIFYING)
 
 # Handlers
 network_handler = None
 download_handler = None
 flash_handler = None
 usb_handler = None
+ap_handler = None
+_init_lock = threading.Lock()
 
 def init_handlers() -> None:
     """Initialize all handler instances
 
-    Creates singleton instances of network, download, flash, and USB handlers.
-    Called automatically when APIHandler is instantiated.
+    Creates singleton instances of network, download, flash, USB and AP
+    (setup-AP provisioning) handlers. Called when APIHandler is instantiated.
+
+    Thread-safe (double-checked locking): the threaded servers (:8124 and the
+    captive :80) can enter this concurrently on the first portal load, which
+    fires several /api requests at once. The guard global (network_handler) is
+    published LAST, so no thread ever sees a half-initialised set.
     """
-    global network_handler, download_handler, flash_handler, usb_handler
-    if network_handler is None:
-        network_handler = network.get_network_handler()
-        download_handler = download.DownloadHandler()
-        flash_handler = flash.FlashHandler()
-        usb_handler = usb.USBHandler()
+    global network_handler, download_handler, flash_handler, usb_handler, ap_handler
+    if network_handler is not None:
+        return
+    with _init_lock:
+        if network_handler is not None:
+            return
+        dh = download.DownloadHandler()
+        fh = flash.FlashHandler()
+        uh = usb.USBHandler()
+        aph = ap.get_ap_handler()
+        nh = network.get_network_handler()
+        download_handler, flash_handler, usb_handler, ap_handler = dh, fh, uh, aph
+        network_handler = nh  # set the guard LAST, after all others exist
 
 class APIHandler:
     """REST API request handler
@@ -160,6 +180,87 @@ class APIHandler:
                 'connected': success,
                 'message': 'Internet connection OK' if success else 'No internet connection'
             }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    # ==================== PROVISIONING (SETUP-AP) ====================
+
+    def get_ap_status(self) -> Dict[str, Any]:
+        """GET /api/network/ap/status - setup-AP + provisioning state"""
+        try:
+            status = ap_handler.status()
+            status['success'] = True
+            status['active'] = status['phase'] in _PROVISIONING_PHASES
+            return status
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def get_provision_networks(self) -> Dict[str, Any]:
+        """GET /api/provision/networks - WiFi list for the captive portal
+
+        While the AP holds the single radio a live scan is impossible, so the
+        pre-AP cached scan (written by jrescue-netdecide) is returned; otherwise
+        a live scan is performed.
+
+        Returns:
+            Dictionary with 'success' and 'networks' (list of network dicts)
+        """
+        try:
+            if ap_handler.is_ap_active():
+                networks = ap_handler.read_scan_cache()
+            else:
+                networks = network_handler.scan_wifi()
+            return {'success': True, 'networks': networks}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def get_provision_status(self) -> Dict[str, Any]:
+        """GET /api/provision/status - live AP->STA handoff phase
+
+        Returns:
+            Dictionary with the ap_handler status (phase/detail/error/sta_ip)
+            plus 'success' and 'active' (derived from the phase — no separate
+            flag to race against).
+        """
+        try:
+            status = ap_handler.status()
+            status['success'] = True
+            status['active'] = status['phase'] in _PROVISIONING_PHASES
+            return status
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def post_provision_connect(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """POST /api/provision/connect - join home WiFi, dropping the AP
+
+        Runs the AP-down -> STA -> verify -> rollback machine in a background
+        thread. The single radio means the AP (and this captive server) vanish
+        mid-handoff, so the caller must NOT wait for the result — the portal
+        renders the "reconnect to your home WiFi" screen locally after posting.
+        Concurrency is guarded by ap_handler.phase (and APHandler's own lock),
+        so there is no separate flag to race on.
+
+        Args:
+            data: Dictionary containing 'ssid' and optional 'password'
+
+        Returns:
+            Dictionary with 'success' and 'message'
+        """
+        try:
+            if ap_handler.phase in _PROVISIONING_PHASES:
+                return {'success': False, 'error': 'Provisioning already in progress'}
+
+            ssid = data.get('ssid')
+            password = data.get('password') or None
+            if not ssid:
+                return {'success': False, 'error': 'SSID is required'}
+
+            threading.Thread(
+                target=ap_handler.provision, args=(ssid, password), daemon=True
+            ).start()
+
+            return {'success': True, 'message': f'Joining {ssid}…'}
+
         except Exception as e:
             return {'success': False, 'error': str(e)}
 

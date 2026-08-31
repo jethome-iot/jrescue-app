@@ -47,6 +47,18 @@ JETHOME_API_BASE = "https://fw.jethome.com"
 # Network
 NETWORK_TIMEOUT = 30
 
+# WiFi setup-AP provisioning. This standalone OLED config does NOT import core,
+# so these MUST mirror core/config.py — core/ap.py resolves `import config` to
+# THIS module when running under the OLED app (sys.modules shadowing), so the
+# constants it reads must exist here too.
+AP_SERVICE = "jrescue-ap.service"
+AP_ADDR = "10.42.0.1"
+AP_URL = "http://10.42.0.1"
+CAPTIVE_PORT = 80
+AP_CREDS_FILE = "/run/jrescue/ap-creds.txt"
+AP_SCAN_CACHE = "/run/jrescue/wifi-scan.txt"
+MDNS_HOSTNAME = "jethub.local"
+
 # Download settings
 DD_BLOCK_SIZE = 4  # MB
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB

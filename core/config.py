@@ -76,6 +76,16 @@ ETHERNET_INTERFACE = "eth0"
 # Connection timeout in seconds
 NETWORK_TIMEOUT = 10
 
+AP_SERVICE = "jrescue-ap.service"
+AP_ADDR = "10.42.0.1"
+AP_URL = "http://10.42.0.1"
+CAPTIVE_PORT = 80
+
+AP_CREDS_FILE = "/run/jrescue/ap-creds.txt"   # SSID=/PSK=/ADDR=/URL=
+AP_SCAN_CACHE = "/run/jrescue/wifi-scan.txt"  # nmcli -t SSID:SIGNAL:SECURITY (pre-AP)
+
+MDNS_HOSTNAME = "jethub.local"
+
 # ==================== STORAGE SETTINGS ====================
 
 # eMMC device path (check with: lsblk)
