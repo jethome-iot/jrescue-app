@@ -44,9 +44,9 @@ def network_setup_menu():
     network_handler = get_network_handler()
 
     if not network_handler:
-        show_text_screen("Network", [
-            "NetworkManager not available.",
-            "nmcli was not found — the recovery image must ship NetworkManager.",
+        show_text_screen(t("network_menu"), [
+            t("nm_unavailable"),
+            t("nm_unavailable_hint"),
         ])
         return
 
@@ -91,31 +91,42 @@ def network_setup_menu():
         elif choice == 4:
             # Test connectivity
             _, out = show_wait_screen(
-                t("test_connection"), "Testing connection...",
+                t("test_connection"), t("testing_conn"),
                 network_handler.test_connectivity
             )
             show_text_screen(t("test_connection"),
-                             _output_lines(out) or ["No output"])
+                             _output_lines(out) or [t("no_output")])
 
 
 def wifi_setup(network_handler):
     """WiFi configuration (scan, pick, password, connect) — all curses."""
-    networks, out = show_wait_screen("WiFi", "Scanning for networks...",
+    networks, out = show_wait_screen("WiFi", t("scanning_networks"),
                                      network_handler.scan_wifi)
 
     if isinstance(networks, Exception) or not networks:
         show_text_screen("WiFi", [
-            "No WiFi networks found.",
-            "Make sure the WiFi adapter is enabled.",
+            t("no_networks"),
+            t("make_sure_wifi"),
         ] + _output_lines(out, limit=6))
         return
 
-    # Build menu options
+    # Build menu options as an aligned table: SSID · lock · encryption · signal.
+    # Fixed-width columns (+ the menu's fixed-width item numbers) keep the lock
+    # icons and everything after them on one vertical line for every row.
     menu_options = [t("back_cancel")]
     for network in networks:
-        security_icon = "🔒" if network['security'] != "Open" else "🔓"
-        signal_bars = "█" * (int(network['signal']) // 25)
-        menu_line = f"{network['ssid']:<30} {security_icon} [{signal_bars:<4}] {network['signal']}%"
+        ssid = network['ssid']
+        sec = (network['security'] or "").strip()
+        if sec in ("", "--"):
+            sec = "Open"
+        lock = "🔓" if sec == "Open" else "🔒"
+        try:
+            signal = int(network['signal'])
+        except (ValueError, TypeError):
+            signal = 0
+        bars = "█" * (signal // 25)
+        ssid_disp = (ssid[:17] + "…") if len(ssid) > 18 else ssid
+        menu_line = f"{ssid_disp:<18} {lock} {sec[:12]:<12} [{bars:<4}] {signal:>3}%"
         menu_options.append(menu_line)
 
     choice = show_menu(f'{t("select_network")} ({len(networks)})', menu_options)
@@ -134,23 +145,23 @@ def wifi_setup(network_handler):
     password = None
     if selected_network['security'] != "Open":
         password = input_dialog(
-            f"WiFi Password for {ssid}",
-            "Enter password",
+            t("wifi_pass_for", ssid=ssid),
+            t("enter_password"),
             password=True
         )
         if password is None:
             return  # cancelled
 
-    result, out = show_wait_screen("WiFi", f"Connecting to {ssid}...",
+    result, out = show_wait_screen("WiFi", t("connecting_to", ssid=ssid),
                                    network_handler.connect_wifi, ssid, password)
 
     if result is True:
-        _, test_out = show_wait_screen(t("test_connection"), "Testing connection...",
+        _, test_out = show_wait_screen(t("test_connection"), t("testing_conn"),
                                        network_handler.test_connectivity)
-        show_text_screen("WiFi", [f"✓ Connected to {ssid}", ""]
+        show_text_screen("WiFi", [t("connected_to", ssid=ssid), ""]
                          + _output_lines(test_out))
     else:
-        show_text_screen("WiFi", [f"✗ Failed to connect to {ssid}", ""]
+        show_text_screen("WiFi", [t("connect_failed_to", ssid=ssid), ""]
                          + _output_lines(out, limit=10))
 
 
@@ -180,7 +191,7 @@ def provision_ap():
 
     if not ap_handler.is_ap_active():
         show_text_screen(t("provision_ap"),
-                         ["Failed to start the access point."] + _output_lines(out, 8))
+                         [t("ap_start_failed")] + _output_lines(out, 8))
         return
 
     ssid = creds.get('ssid') or 'jethub'
@@ -188,19 +199,18 @@ def provision_ap():
     url = creds.get('url') or config.AP_URL
 
     show_text_screen(t("provision_ap"), [
-        "Wi-Fi setup access point is ON.",
+        t("ap_on_line"),
         "",
-        "On your phone:",
-        f"  1. Join Wi-Fi network:  {ssid}",
-        f"     Password:            {psk}",
-        f"  2. Open in a browser:   {url}",
+        t("ap_on_phone"),
+        "  " + t("ap_step_join", ssid=ssid),
+        "  " + t("ap_step_pass", psk=psk),
+        "  " + t("ap_step_open", url=url),
         "",
-        "There, choose your home Wi-Fi and enter its",
-        "password. This device will join it and the",
-        "setup network will close — your phone will",
-        "disconnect (that is normal). Then reconnect",
-        "your phone to your home Wi-Fi and open",
-        f"http://{config.MDNS_HOSTNAME}:8124",
+        t("ap_body1"),
+        t("ap_body2"),
+        t("ap_body3"),
+        t("ap_body4"),
+        t("ap_body5") + f" http://{config.MDNS_HOSTNAME}:8124",
     ])
 
 
@@ -240,7 +250,7 @@ def flash_to_device(image_path: str, cleanup=None) -> bool:
         return flash_handler.flash_image(image_path, skip_confirmation=True,
                                          progress_cb=progress)
 
-    result, out = show_progress_screen("Flashing eMMC", worker)
+    result, out = show_progress_screen(t("title_flashing"), worker)
 
     if cleanup:
         cleanup()
@@ -249,8 +259,8 @@ def flash_to_device(image_path: str, cleanup=None) -> bool:
         _reboot_prompt()
         return True
 
-    show_text_screen("Flashing failed",
-                     _output_lines(out, limit=15) or ["Flashing failed."])
+    show_text_screen(t("flashing_failed"),
+                     _output_lines(out, limit=15) or [t("flashing_failed_body")])
     return False
 
 
@@ -259,21 +269,21 @@ def flash_from_http():
     network_handler = get_network_handler()
 
     if network_handler:
-        ok, out = show_wait_screen("Download", "Checking network connection...",
+        ok, out = show_wait_screen(t("title_download"), t("checking_network"),
                                    network_handler.test_connectivity)
         if ok is not True:
-            show_text_screen("Download", [
-                "No internet connection.",
-                "Please configure the network first.",
+            show_text_screen(t("title_download"), [
+                t("no_internet"),
+                t("configure_network"),
             ] + _output_lines(out, limit=8))
             return False
 
     # Check RAM space for the compressed image
     free_space = check_disk_space(config.TEMP_DIR)
     if free_space < config.MIN_FREE_SPACE:
-        show_text_screen("Download", [
-            f"Low RAM space: {format_bytes(free_space)} available.",
-            f"Need at least {format_bytes(config.MIN_FREE_SPACE)} for safe operation.",
+        show_text_screen(t("title_download"), [
+            t("low_ram_space", space=format_bytes(free_space)),
+            t("need_ram_space", space=format_bytes(config.MIN_FREE_SPACE)),
         ])
         return False
 
@@ -296,10 +306,10 @@ def flash_from_usb():
     if device['mountpoint']:
         mount_point = device['mountpoint']
     else:
-        ok, out = show_wait_screen("USB", f"Mounting {device['device']}...",
+        ok, out = show_wait_screen("USB", t("mounting_dev", device=device['device']),
                                    usb_handler.mount_device, device['device'])
         if ok is not True:
-            show_text_screen("USB", ["Failed to mount USB device."]
+            show_text_screen("USB", [t("mount_usb_failed")]
                              + _output_lines(out, limit=8))
             return False
         mount_point = usb_handler.mount_point
@@ -309,11 +319,11 @@ def flash_from_usb():
             usb_handler.unmount_device()
 
     # Scan for images
-    images, out = show_wait_screen("USB", "Scanning for images...",
+    images, out = show_wait_screen("USB", t("scanning_images"),
                                    usb_handler.scan_for_images, mount_point)
     if isinstance(images, Exception) or not images:
         unmount_if_needed()
-        show_text_screen("USB", ["No image files found on USB."]
+        show_text_screen("USB", [t("no_images_on_usb")]
                          + _output_lines(out, limit=8))
         return False
 
@@ -344,7 +354,7 @@ def manage_ram_images():
         ram_dir = config.TEMP_DIR
         if not os.path.exists(ram_dir):
             show_text_screen(t("images_in_ram"),
-                             [f"RAM directory not found: {ram_dir}"])
+                             [t("ram_dir_missing", dir=ram_dir)])
             return False
 
         image_files = []
@@ -360,12 +370,12 @@ def manage_ram_images():
 
         if not image_files:
             show_text_screen(t("images_in_ram"), [
-                f"No images found in RAM ({ram_dir}).",
-                "Download an image first using the API download option.",
+                t("no_images_ram_dir", dir=ram_dir),
+                t("download_first_hint"),
             ])
             return False
 
-        menu_options = ["← Back to Flash Menu"]
+        menu_options = [t("back_to_flash_menu")]
         for img in image_files:
             menu_options.append(f"{img['filename']} ({format_bytes(img['size'])})")
 
@@ -407,7 +417,7 @@ def manage_ram_images():
                     selected['filename'],
                     f"{t('size')}: {format_bytes(selected['size'])}",
                     "",
-                    "Deleting frees RAM for new downloads.",
+                    t("deleting_frees_ram"),
                 ],
                 yes_label=t("yes_delete"),
                 no_label=t("cancel"),
@@ -417,7 +427,7 @@ def manage_ram_images():
                     os.remove(selected['path'])
                 except Exception as e:
                     show_text_screen(t("confirm_deletion"),
-                                     [f"Failed to delete: {e}"])
+                                     [t("failed_delete", error=e)])
                 # Loop back to the (updated) image list
 
 
@@ -428,7 +438,7 @@ def flash_image_menu():
             t("back_to_main"),
             t("source_http"),
             t("source_usb"),
-            "Flash from Downloaded"
+            t("source_ram")
         ]
 
         source_choice = show_menu(t("select_image_source"), options)
@@ -454,51 +464,42 @@ def system_info_menu():
     def collect():
         info = get_system_info()
 
-        lines = [
-            f"Hostname:      {info['hostname']}",
-            f"Kernel:        {info['kernel']}",
-            f"Architecture:  {info['arch']}",
-            f"Memory:        {info['memory']}",
-            f"Free Space:    {info['disk_free']}",
-            "",
-            f"Device:        {config.JETHOME_DEVICE_NAME}",
-            f"Platform:      {config.JETHOME_PLATFORM}",
-            f"Version:       {config.APP_VERSION}",
-            "",
-            f"eMMC Device:   {config.EMMC_DEVICE}",
-            f"Temp Dir:      {config.TEMP_DIR}",
-            f"USB Mount:     {config.USB_MOUNT_POINT}",
-            "",
+        # Only the fields worth showing here (kernel/arch/memory/paths dropped).
+        rows = [
+            (t("hostname"), info['hostname']),
+            (t("device"), config.JETHOME_DEVICE_NAME),
+            (t("version"), config.APP_VERSION),
         ]
 
         network_handler = get_network_handler()
         if network_handler:
             status = network_handler.get_connection_status()
             if status['connected']:
-                lines.append(f"Network:       Connected ({status['interface']})")
+                rows.append((t("network"), t("net_connected", iface=status['interface'])))
                 if status['ip']:
-                    lines.append(f"IP Address:    {status['ip']}")
+                    rows.append((t("ip_address"), status['ip']))
                 if status['ssid']:
-                    lines.append(f"WiFi:          {status['ssid']}")
+                    rows.append((t("wifi_network"), status['ssid']))
             else:
-                lines.append("Network:       Not connected")
-
-        lines.append("")
+                rows.append((t("network"), t("net_not_connected")))
 
         web_port = 8124
         if check_web_app_status("localhost", web_port):
             local_ip = get_local_ip() or "localhost"
-            lines.append("Web UI:        Running")
-            lines.append(f"Access URL:    http://{local_ip}:{web_port}")
+            rows.append((t("web_ui"), t("web_ui_running")))
+            rows.append((t("access_url"), f"http://{local_ip}:{web_port}"))
         else:
-            lines.append(f"Web UI:        Not running (port {web_port})")
-        return lines
+            rows.append((t("web_ui"), t("web_ui_stopped", port=web_port)))
 
-    lines, _ = show_wait_screen(t("system_info"), "Collecting system info...", collect)
+        # Dynamic label column so translated labels of any width stay aligned.
+        w = max(len(lbl) for lbl, _ in rows) + 3
+        return [f"{(lbl + ':'):<{w}}{val}" for lbl, val in rows]
+
+    lines, _ = show_wait_screen(t("system_info"), t("collecting_info"), collect)
     if isinstance(lines, Exception):
-        lines = [f"Failed to collect system info: {lines}"]
+        lines = [str(lines)]
     # Live-refresh so the IP/network fields track cable plug/unplug in real time.
-    show_text_screen("SYSTEM INFORMATION", lines, refresh_fn=collect, refresh_ms=2000)
+    show_text_screen(t("system_information"), lines, refresh_fn=collect, refresh_ms=2000)
 
 
 def settings_menu():
@@ -512,21 +513,6 @@ def settings_menu():
             'set': app_locale.set_language,
             'help': "Interface language for the console application.\n"
                     "Applies immediately to all menus.",
-        },
-        {
-            'type': 'int',
-            'label': 'Network timeout (s)',
-            'get': lambda: config.NETWORK_TIMEOUT,
-            'set': lambda v: setattr(config, 'NETWORK_TIMEOUT', v),
-            'help': "Timeout for API requests and downloads, in seconds.",
-        },
-        {
-            'type': 'bool',
-            'label': 'Verbose logs',
-            'get': lambda: config.VERBOSE_LOGS,
-            'set': lambda v: setattr(config, 'VERBOSE_LOGS', v),
-            'help': "Show informational messages in captured\n"
-                    "operation output (connection test, flashing).",
         },
     ]
     show_settings_screen(t("settings"), items)

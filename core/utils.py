@@ -239,6 +239,20 @@ def _init_colors():
     curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLUE)    # input field
 
 
+def _hint(key: str, default: str) -> str:
+    """Localize a shared curses-chrome string (hint bar / header) via the
+    frontend's translations, falling back to the English default when
+    translations aren't loaded or the key is missing. Lets the generic curses
+    helpers be translated without every caller threading hint strings through.
+    """
+    try:
+        import translations
+        s = translations.t(key)
+        return s if s and s != key else default
+    except Exception:
+        return default
+
+
 def _draw_frame(stdscr, title: str, hint: str = "") -> tuple:
     """Draw a full-screen menuconfig-style frame.
 
@@ -330,7 +344,7 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str],
         # menuconfig-style: full-screen frame, compact left-aligned list,
         # scrolling for long lists. No syscalls in the draw loop.
         y0, x0, body_h, body_w = _draw_frame(
-            stdscr, cur_title, "↑↓ move   Enter select   1-9 jump   Esc back")
+            stdscr, cur_title, _hint("hint_menu", "↑↓ move   Enter select   1-9 jump   Esc back"))
         y0 += 1  # breathing row under the top border
         body_h = max(1, body_h - 1)
 
@@ -340,12 +354,13 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str],
             top = current_row - body_h + 1
         top = max(0, min(top, max(0, len(options) - body_h)))
 
+        num_w = len(str(len(options)))  # align 1- vs 2-digit item numbers
         for i in range(body_h):
             idx = top + i
             if idx >= len(options):
                 break
             marker = "❯" if idx == current_row else " "
-            line = f" {marker} {idx + 1}. {options[idx]} "
+            line = f" {marker} {idx + 1:>{num_w}}. {options[idx]} "
             if len(line) > body_w - 2:
                 line = line[:max(0, body_w - 5)] + "..."
             try:
@@ -413,7 +428,8 @@ def show_menu_horizontal_curses(stdscr, title: str, options: List[str]) -> int:
     while True:
         stdscr.erase()
         y0, x0, body_h, body_w = _draw_frame(
-            stdscr, "Confirm", "←→ move   Enter select   Esc back")
+            stdscr, _hint("confirm_title", "Confirm"),
+            _hint("hint_hmenu", "←→ move   Enter select   Esc back"))
 
         # Wrap the question inside the frame
         title_lines = []
@@ -516,7 +532,7 @@ def input_dialog_curses(stdscr, title: str, prompt: str, password: bool = False)
         while True:
             stdscr.erase()
             y0, x0, body_h, body_w = _draw_frame(
-                stdscr, title, "Tab/↑↓ focus   Enter select   Esc cancel")
+                stdscr, title, _hint("hint_input", "Tab/↑↓ focus   Enter select   Esc cancel"))
             w = stdscr.getmaxyx()[1]
 
             # Prompt
@@ -650,8 +666,8 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str],
         scroll = len(lines) > 1  # recomputed against body below
         y0, x0, body_h, body_w = _draw_frame(
             stdscr, title,
-            "↑↓ PgUp/PgDn scroll   Enter/Esc — back" if scroll
-            else "Enter/Esc — back")
+            _hint("hint_text_scroll", "↑↓ PgUp/PgDn scroll   Enter/Esc — back") if scroll
+            else _hint("hint_text", "Enter/Esc — back"))
         max_top = max(0, len(lines) - body_h)
         top = min(max(0, top), max_top)
 
@@ -855,7 +871,7 @@ def show_confirm_screen(title: str, lines: List[str], yes_label: str = "YES",
         while True:
             stdscr.erase()
             y0, x0, body_h, body_w = _draw_frame(
-                stdscr, title, "←→ move   Enter select   Esc cancel")
+                stdscr, title, _hint("hint_hchoice", "←→ move   Enter select   Esc cancel"))
             w = stdscr.getmaxyx()[1]
             y = y0 + 1
             for ln in lines:
@@ -925,7 +941,7 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
 
     def inline_help(item):
         stdscr.erase()
-        y0, x0, body_h, body_w = _draw_frame(stdscr, item['label'], "any key — back")
+        y0, x0, body_h, body_w = _draw_frame(stdscr, item['label'], _hint("hint_anykey", "any key — back"))
         y = y0
         for ln in item.get('help', 'No help available.').split('\n'):
             if y >= y0 + body_h:
@@ -945,7 +961,7 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
         while True:
             stdscr.erase()
             y0, x0, body_h, body_w = _draw_frame(
-                stdscr, item['label'], "↑↓ move   Enter select   Esc cancel")
+                stdscr, item['label'], _hint("hint_settings_choice", "↑↓ move   Enter select   Esc cancel"))
             for i, (val, lab) in enumerate(choices):
                 y = y0 + i
                 if y >= y0 + body_h:
@@ -981,7 +997,7 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
             while True:
                 stdscr.erase()
                 y0, x0, body_h, body_w = _draw_frame(
-                    stdscr, item['label'], "Enter save   Esc cancel   Backspace delete")
+                    stdscr, item['label'], _hint("hint_settings_str", "Enter save   Esc cancel   Backspace delete"))
                 prompt = f"{item['label']}: "
                 text = ''.join(buf)
                 try:
@@ -1017,7 +1033,7 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
         stdscr.erase()
         y0, x0, body_h, body_w = _draw_frame(
             stdscr, title,
-            "↑↓ move   Space/Enter change   ? help   Esc back   (resets on reboot)")
+            _hint("hint_settings", "↑↓ move   Space/Enter change   ? help   Esc back   (resets on reboot)"))
         y0 += 1  # breathing row under the top border
         body_h = max(1, body_h - 1)
         if current < top:
