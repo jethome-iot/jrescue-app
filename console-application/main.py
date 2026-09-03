@@ -9,6 +9,7 @@ with WiFi/Ethernet configuration through NetworkManager.
 
 import sys
 import os
+import signal
 import time
 
 # Add core directory to path
@@ -99,7 +100,16 @@ def network_setup_menu():
 
 
 def wifi_setup(network_handler):
-    """WiFi configuration (scan, pick, password, connect) — all curses."""
+    """WiFi configuration (scan, pick, password, connect) — all curses.
+
+    The radio is single: while the setup-AP holds it nothing can be scanned or
+    joined, so release it first (otherwise connecting from the console/OLED is
+    impossible whenever the AP came up automatically for lack of ethernet).
+    """
+    ap_handler = ap.get_ap_handler()
+    if ap_handler.is_ap_active():
+        show_wait_screen("WiFi", t("stopping_ap"), ap_handler.release_radio)
+
     networks, out = show_wait_screen("WiFi", t("scanning_networks"),
                                      network_handler.scan_wifi)
 
@@ -173,6 +183,7 @@ def provision_ap():
     scan/select/connect and tears the AP down once the home Wi-Fi is joined.
     """
     ap_handler = ap.get_ap_handler()
+    already_up = ap_handler.is_ap_active()
 
     def bring_up():
         if not ap_handler.is_ap_active():
@@ -198,7 +209,7 @@ def provision_ap():
     psk = creds.get('psk') or 'jethub123'
     url = creds.get('url') or config.AP_URL
 
-    show_text_screen(t("provision_ap"), [
+    body = [
         t("ap_on_line"),
         "",
         t("ap_on_phone"),
@@ -211,7 +222,18 @@ def provision_ap():
         t("ap_body3"),
         t("ap_body4"),
         t("ap_body5") + f" http://{config.MDNS_HOSTNAME}:8124",
-    ])
+    ]
+
+    if already_up:
+        # The AP holds the single radio, so offer to hand it back — otherwise
+        # Wi-Fi setup from this console (or the OLED) has nothing to scan with.
+        if show_confirm_screen(t("provision_ap"), body,
+                               yes_label=t("ap_stop"), no_label=t("ok")):
+            show_wait_screen(t("provision_ap"), t("stopping_ap"),
+                             ap_handler.release_radio)
+            show_text_screen(t("provision_ap"), [t("ap_stopped")])
+    else:
+        show_text_screen(t("provision_ap"), body)
 
 
 def _reboot_prompt():
@@ -491,9 +513,14 @@ def system_info_menu():
         else:
             rows.append((t("web_ui"), t("web_ui_stopped", port=web_port)))
 
-        # Dynamic label column so translated labels of any width stay aligned.
+        # Dynamic label column so translated labels of any width stay aligned,
+        # with a blank row between entries for a small vertical gap.
         w = max(len(lbl) for lbl, _ in rows) + 3
-        return [f"{(lbl + ':'):<{w}}{val}" for lbl, val in rows]
+        lines = []
+        for lbl, val in rows:
+            lines.append(f"{(lbl + ':'):<{w}}{val}")
+            lines.append("")
+        return lines[:-1]
 
     lines, _ = show_wait_screen(t("system_info"), t("collecting_info"), collect)
     if isinstance(lines, Exception):
@@ -576,6 +603,15 @@ def cleanup_old_temp_dir():
 
 def main():
     """Main entry point"""
+    # Kiosk: the terminal-generated signals must not drop the user out of the
+    # recovery UI. Ctrl+C (INT), Ctrl+\ (QUIT) and Ctrl+Z (TSTP) are ignored;
+    # SIGTERM is left alone so systemd can still stop the service.
+    for _sig in ('SIGINT', 'SIGQUIT', 'SIGTSTP'):
+        try:
+            signal.signal(getattr(signal, _sig), signal.SIG_IGN)
+        except (AttributeError, ValueError, OSError):
+            pass
+
     try:
         # Check root privileges
         require_root()

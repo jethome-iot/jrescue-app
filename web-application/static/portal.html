@@ -9,11 +9,15 @@
     --bg: #f2f3f5; --card: #ffffff; --fg: #1c1e21; --muted: #65676b;
     --accent: #0a7cff; --accent-fg: #ffffff; --border: #d9dbe0;
     --ok: #1a7f37; --warn: #b25000; --err: #c62828;
+    --err-bg: #fdecec; --warn-bg: #fdf3e7;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #18191a; --card: #242526; --fg: #e4e6eb; --muted: #b0b3b8;
       --accent: #2d88ff; --border: #3a3b3c;
+      /* the light-theme reds/greens are unreadable on a dark card */
+      --ok: #4ade80; --warn: #ffb454; --err: #ff6b6b;
+      --err-bg: #3a2020; --warn-bg: #3a3020;
     }
   }
   * { box-sizing: border-box; }
@@ -37,6 +41,9 @@
     width: 100%; padding: 12px; font-size: 1rem; color: var(--fg);
     background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
   }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+    font-size: 0.9rem; color: var(--muted); }
+  .check input { width: auto; }
   .nets { list-style: none; margin: 0; padding: 0; }
   .nets li {
     display: flex; align-items: center; justify-content: space-between;
@@ -59,6 +66,15 @@
   .ok { color: var(--ok); }
   .big { font-size: 1.1rem; font-weight: 600; }
   code { background: var(--bg); padding: 2px 6px; border-radius: 6px; }
+  .banner {
+    background: var(--err-bg); border: 1px solid var(--err); border-radius: 14px;
+    padding: 16px; margin-top: 14px;
+  }
+  .banner h2 { color: var(--err); margin-bottom: 8px; }
+  .banner p { margin: 6px 0; font-size: 0.95rem; }
+  .banner button { margin-top: 12px; }
+  .steps { margin: 8px 0 0; padding-left: 22px; }
+  .steps li { margin: 8px 0; }
   .spin { display: inline-block; width: 18px; height: 18px; border: 3px solid var(--border);
     border-top-color: var(--accent); border-radius: 50%; animation: sp 0.8s linear infinite;
     vertical-align: middle; margin-right: 8px; }
@@ -73,6 +89,14 @@
     <p>Connect this device to your Wi-Fi</p>
   </header>
 
+  <!-- Shown when the previous attempt failed and the AP came back by itself -->
+  <section id="fail-banner" class="banner" hidden>
+    <h2 id="fail-title">Couldn't connect</h2>
+    <p id="fail-why"></p>
+    <p id="fail-fix" class="hint"></p>
+    <button id="fail-dismiss" class="secondary" type="button">Try again</button>
+  </section>
+
   <!-- Screen 1: pick a network -->
   <section id="scr-select" class="card">
     <h2>Choose your Wi-Fi network</h2>
@@ -82,9 +106,14 @@
     <label id="lbl-manual" for="manual-ssid" hidden>Network name (SSID)</label>
     <input id="manual-ssid" type="text" autocapitalize="none" autocorrect="off"
            spellcheck="false" placeholder="Enter network name" hidden>
+    <div id="manual-open-row" class="check" hidden>
+      <input id="manual-open" type="checkbox">
+      <label for="manual-open" style="margin:0">This network has no password</label>
+    </div>
 
     <label id="lbl-pass" for="password" hidden>Wi-Fi password</label>
     <input id="password" type="password" placeholder="Password" hidden>
+    <p id="pw-hint" class="hint" hidden>Wi-Fi passwords are 8–63 characters.</p>
 
     <button id="btn-continue" disabled>Continue</button>
     <button id="btn-manual" class="secondary" type="button">Enter network manually</button>
@@ -94,12 +123,18 @@
   <!-- Screen 2: confirm (single-radio warning) -->
   <section id="scr-confirm" class="card" hidden>
     <h2>Before you continue</h2>
-    <p>JetHub will now switch to <span class="big" id="confirm-ssid"></span>.</p>
-    <p class="warn">The <b id="confirm-ap"></b> network will close and your phone
-       will disconnect from it — that is expected.</p>
-    <p>Afterwards, reconnect your phone to your home Wi-Fi and open
-       <code id="confirm-url">http://jethub.local:8124</code> to continue.
-       If the device can't join, it will re-open its setup network so you can try again.</p>
+    <p>JetHub will switch to <span class="big" id="confirm-ssid"></span>. Here is
+       what happens:</p>
+    <ol class="steps">
+      <li>The <b class="ap-name"></b> setup network closes and
+          <b>your phone disconnects</b>. That is expected.</li>
+      <li>JetHub joins your Wi-Fi — up to <b><span id="confirm-secs">60</span> seconds</b>.</li>
+      <li><b>If it works:</b> reconnect your phone to your home Wi-Fi and open
+          <code class="rediscover">http://jethub.local:8124</code>.</li>
+      <li><b>If it doesn't:</b> JetHub reopens <b class="ap-name"></b> by itself —
+          rejoin it and this page will say what went wrong.</li>
+    </ol>
+    <p class="hint warn">Don't power the device off while it is switching.</p>
     <button id="btn-connect">Connect JetHub to Wi-Fi</button>
     <button id="btn-back" class="secondary" type="button">Back</button>
   </section>
@@ -108,76 +143,157 @@
   <section id="scr-done" class="card" hidden>
     <h2 class="ok">JetHub is connecting…</h2>
     <p>It is joining <span class="big" id="done-ssid"></span> now.</p>
-    <ol>
+    <p id="countdown" class="hint"></p>
+    <ol class="steps">
       <li>Reconnect your phone to your home Wi-Fi.</li>
-      <li>Open <code id="done-url">http://jethub.local:8124</code>.</li>
+      <li>Open <code class="rediscover">http://jethub.local:8124</code>.</li>
     </ol>
-    <p class="hint">If nothing loads after a minute, the device could not join and
-       has re-opened its <b id="done-ap"></b> setup network — reconnect to it and try again.</p>
+    <p class="hint">If nothing loads, JetHub could not join and has reopened its
+       <b class="ap-name"></b> setup network — rejoin it and this page will
+       explain why.</p>
   </section>
 </div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const REDISCOVER = "http://jethub.local:8124";
-let selected = null;      // {ssid, secured}
-let apName = "the setup";
+let selected = null;        // {ssid, secured}
+let apName = "JetHub setup";
+let handoffSecs = 60;
+let networks = [];
+let lastFailure = null;     // {code, ssid}
+
+// Every failure the backend can report (core/ap.py ERR_*). `pw` marks the ones
+// where the password is what needs fixing, so we refocus that field.
+const FAIL_MSG = {
+  wrong_password:      { why: "the password looks wrong.", fix: "Check for typos, upper/lower case, and retype it.", pw: true },
+  bad_password_format: { why: "that password can't be right.", fix: "Wi-Fi passwords are 8–63 characters.", pw: true },
+  no_password:         { why: "it needs a password.", fix: "Enter the network's password.", pw: true },
+  timeout:             { why: "it didn't answer in time.", fix: "The password may be wrong, or the signal too weak. Move JetHub closer and retry.", pw: true },
+  not_found:           { why: "JetHub couldn't find it.", fix: "Check the network is on and in range. JetHub scans 2.4 GHz only — a 5 GHz-only network is invisible to it." },
+  no_dhcp:             { why: "the router never gave JetHub an address.", fix: "Check the router's DHCP is on, then retry." },
+  no_internet:         { why: "JetHub joined it but couldn't reach the network.", fix: "Retry, or pick a different network." },
+  enterprise:          { why: "it's a corporate (WPA-Enterprise) network.", fix: "Those need a username and certificate, which this setup can't do. Use a normal WPA2 network." },
+  wep:                 { why: "it uses old WEP security.", fix: "WEP isn't supported — use a WPA2 network." },
+  bad_ssid:            { why: "that network name can't be used.", fix: "Pick the network from the list instead." },
+  radio_busy:          { why: "the Wi-Fi radio was busy.", fix: "Wait a moment and try again." },
+  busy:                { why: "another attempt is already running.", fix: "Wait for it to finish." },
+  no_ssid:             { why: "no network was selected.", fix: "Pick a network from the list." },
+  unknown:             { why: "JetHub couldn't join it.", fix: "Try again, or use a different network." }
+};
 
 function show(screen) {
   for (const s of ["scr-select", "scr-confirm", "scr-done"]) $(s).hidden = (s !== screen);
+  // The failure banner belongs to the picker only.
+  $("fail-banner").hidden = $("fail-banner").hidden || screen !== "scr-select";
+}
+
+function setText(cls, value) {
+  for (const el of document.querySelectorAll("." + cls)) el.textContent = value;
 }
 
 async function loadStatus() {
   try {
-    const r = await fetch("/api/provision/status");
+    const r = await fetch("/api/provision/status", { cache: "no-store" });
     const d = await r.json();
-    if (d && d.ssid) { apName = d.ssid; }
-    if (d && d.mdns) {
-      const url = "http://" + d.mdns + ":8124";
-      $("confirm-url").textContent = url;
-      $("done-url").textContent = url;
+    if (!d) return;
+    if (d.ssid) apName = d.ssid;
+    if (d.handoff_estimate_s) handoffSecs = d.handoff_estimate_s;
+    if (d.mdns) setText("rediscover", "http://" + d.mdns + ":8124");
+    if (d.failed || d.phase === "failed") {
+      lastFailure = { code: d.error_code || "unknown", ssid: d.last_ssid || "" };
     }
-  } catch (e) { /* offline captive: keep defaults */ }
+  } catch (e) { /* captive with no backend: keep defaults */ }
+  // Debug hook: portal.html?fail=wrong_password renders any banner off-hardware.
+  const forced = new URLSearchParams(location.search).get("fail");
+  if (forced) lastFailure = { code: forced, ssid: "TestNet" };
+
+  setText("ap-name", apName);
+  $("confirm-secs").textContent = handoffSecs;
+}
+
+function renderFailure() {
+  if (!lastFailure) return;
+  const m = FAIL_MSG[lastFailure.code] || FAIL_MSG.unknown;
+  const who = lastFailure.ssid ? "“" + lastFailure.ssid + "”" : "that network";
+  $("fail-title").textContent = "Couldn't connect to " + (lastFailure.ssid || "the network");
+  $("fail-why").textContent = "JetHub tried " + who + " and " + m.why;
+  $("fail-fix").textContent = m.fix;
+  $("fail-banner").hidden = false;
 }
 
 async function loadNetworks() {
   try {
-    const r = await fetch("/api/provision/networks");
+    const r = await fetch("/api/provision/networks", { cache: "no-store" });
     const d = await r.json();
-    renderNetworks((d && d.networks) || []);
+    networks = (d && d.networks) || [];
   } catch (e) {
-    renderNetworks([]);
+    networks = [];
   }
+  renderNetworks();
 }
 
-function renderNetworks(nets) {
+function isSecured(n) {
+  if (n.kind) return n.kind !== "open";
+  return n.security && n.security !== "Open" && n.security !== "--";
+}
+
+function renderNetworks() {
   $("net-loading").hidden = true;
   const list = $("net-list");
   list.innerHTML = "";
-  if (!nets.length) { enableManual(); return; }
-  for (const n of nets) {
-    const secured = n.security && n.security !== "Open" && n.security !== "--";
+  for (const n of networks) {
+    const secured = isSecured(n);
     const li = document.createElement("li");
+    li.dataset.ssid = n.ssid;
     li.innerHTML = '<span class="ssid"></span><span class="meta"></span>';
     li.querySelector(".ssid").textContent = n.ssid;
     li.querySelector(".meta").textContent = (secured ? "🔒 " : "") + (n.signal || "");
     li.onclick = () => pick(li, n.ssid, secured);
     list.appendChild(li);
   }
+  if (!networks.length) enableManual();
+  preselectFailed();
+}
+
+// After a rollback, put the user straight back where they were.
+function preselectFailed() {
+  if (!lastFailure || !lastFailure.ssid) return;
+  const li = $("net-list").querySelector('li[data-ssid="' + CSS.escape(lastFailure.ssid) + '"]');
+  if (li) {
+    const n = networks.find((x) => x.ssid === lastFailure.ssid);
+    pick(li, lastFailure.ssid, n ? isSecured(n) : true);
+    li.scrollIntoView({ block: "nearest" });
+  } else {
+    enableManual();
+    $("manual-ssid").value = lastFailure.ssid;
+    selected = { ssid: lastFailure.ssid, secured: !$("manual-open").checked };
+    updateContinue();
+  }
+  const m = FAIL_MSG[lastFailure.code] || FAIL_MSG.unknown;
+  if (m.pw) $("password").focus();
+}
+
+function pwLooksValid() {
+  const v = $("password").value;
+  if (!selected || !selected.secured) return true;
+  if (!v) return false;
+  return (v.length >= 8 && v.length <= 63) || /^[0-9a-fA-F]{64}$/.test(v);
 }
 
 function updateContinue() {
-  // A secured network needs a password before we let the (offline, one-shot)
-  // handoff start — otherwise it's a guaranteed failed round-trip.
-  $("btn-continue").disabled = !selected || !selected.ssid ||
-    (selected.secured && !$("password").value);
+  // A secured network needs a plausible password before we let the (offline,
+  // one-shot) handoff start — otherwise it's a guaranteed failed round-trip.
+  $("btn-continue").disabled = !selected || !selected.ssid || !pwLooksValid();
+  const v = $("password").value;
+  $("pw-hint").hidden = !(selected && selected.secured && v && !pwLooksValid());
 }
 
 function pick(li, ssid, secured) {
   for (const el of $("net-list").children) el.classList.remove("sel");
   if (li) li.classList.add("sel");
   $("manual-ssid").hidden = true; $("lbl-manual").hidden = true;
+  $("manual-open-row").hidden = true;
   selected = { ssid, secured };
   $("lbl-pass").hidden = !secured;
   $("password").hidden = !secured;
@@ -190,11 +306,37 @@ function enableManual() {
   $("net-loading").hidden = true;
   $("btn-manual").hidden = true;
   $("lbl-manual").hidden = false; $("manual-ssid").hidden = false;
-  $("lbl-pass").hidden = false; $("password").hidden = false;
-  $("manual-ssid").oninput = () => {
-    selected = { ssid: $("manual-ssid").value.trim(), secured: true };
+  $("manual-open-row").hidden = false;
+  const sync = () => {
+    const open = $("manual-open").checked;
+    selected = { ssid: $("manual-ssid").value, secured: !open };
+    $("lbl-pass").hidden = open;
+    $("password").hidden = open;
     updateContinue();
   };
+  $("manual-ssid").oninput = sync;
+  $("manual-open").onchange = sync;
+  sync();
+}
+
+function showReject(code, raw) {
+  // Rejected before the radio moved — we are still connected, so say so here.
+  const m = FAIL_MSG[code] || FAIL_MSG.unknown;
+  const err = $("select-err");
+  err.textContent = m.fix || raw || "That didn't work.";
+  err.hidden = false;
+  if (m.pw) $("password").focus();
+}
+
+function startCountdown() {
+  let left = handoffSecs;
+  const tick = () => {
+    $("countdown").textContent = left > 0
+      ? "Switching… about " + left + "s left."
+      : "It should be done — reconnect your phone to your home Wi-Fi.";
+    if (left-- > 0) setTimeout(tick, 1000);
+  };
+  tick();
 }
 
 $("btn-manual").onclick = enableManual;
@@ -202,31 +344,59 @@ $("btn-manual").onclick = enableManual;
 $("btn-continue").onclick = () => {
   const err = $("select-err");
   err.hidden = true;
-  if (!selected || !selected.ssid) { err.textContent = "Choose a network first."; err.hidden = false; return; }
+  if (!selected || !selected.ssid) {
+    err.textContent = "Choose a network first."; err.hidden = false; return;
+  }
   $("confirm-ssid").textContent = selected.ssid;
   $("done-ssid").textContent = selected.ssid;
-  $("confirm-ap").textContent = apName;
-  $("done-ap").textContent = apName;
   show("scr-confirm");
 };
 
 $("btn-back").onclick = () => show("scr-select");
 
-$("btn-connect").onclick = () => {
-  const body = JSON.stringify({ ssid: selected.ssid, password: $("password").value || "" });
-  // The AP (and this page's server) vanish the instant the handoff starts, so
-  // fire-and-forget and show the "reconnect" screen locally — we can't wait.
+$("btn-connect").onclick = async () => {
+  const btn = $("btn-connect");
+  btn.disabled = true;
+  const payload = JSON.stringify({
+    ssid: selected.ssid, password: selected.secured ? ($("password").value || "") : ""
+  });
+  let res = null;
   try {
-    fetch("/api/provision/connect", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body
-    }).catch(() => {});
-  } catch (e) { /* ignore — connection will drop */ }
+    // The server validates what it can and answers BEFORE dropping the AP, so a
+    // rejection reaches us while we're still online. If the connection dies
+    // instead, the handoff already started — that's the normal path.
+    const r = await fetch("/api/provision/connect", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: payload
+    });
+    res = await r.json();
+  } catch (e) {
+    res = null;
+  }
+  btn.disabled = false;
+  if (res && res.success === false) {
+    show("scr-select");
+    showReject(res.error_code, res.error);
+    return;
+  }
   show("scr-done");
+  startCountdown();
+};
+
+$("fail-dismiss").onclick = () => {
+  $("fail-banner").hidden = true;
+  lastFailure = null;
+  fetch("/api/provision/dismiss", { method: "POST" }).catch(() => {});
 };
 
 $("password").oninput = updateContinue;
-loadStatus();
-loadNetworks();
+
+// Serialised on purpose: the failure state decides which network gets
+// preselected, so it must be known before the list renders.
+(async () => {
+  await loadStatus();
+  renderFailure();
+  await loadNetworks();
+})();
 </script>
 </body>
 </html>

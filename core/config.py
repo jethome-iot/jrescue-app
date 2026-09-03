@@ -83,6 +83,8 @@ CAPTIVE_PORT = 80
 
 AP_CREDS_FILE = "/run/jrescue/ap-creds.txt"   # SSID=/PSK=/ADDR=/URL=
 AP_SCAN_CACHE = "/run/jrescue/wifi-scan.txt"  # nmcli -t SSID:SIGNAL:SECURITY (pre-AP)
+AP_STATE_FILE = "/run/jrescue/provision-state.json"  # last provisioning outcome
+AP_HANDOFF_ESTIMATE_S = 60                    # worst-case AP->STA outage, shown to the user
 
 MDNS_HOSTNAME = "jethub.local"
 

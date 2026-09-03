@@ -151,10 +151,37 @@ AP creds are the **static** `jethub`/`jethub123` (WPA2) for now — a per-device
 unauthenticated; WPA2 + tearing the AP down on STA success bound the exposure.
 `AP_*` constants live in `core/config.py` **and** are mirrored in
 `oled-grid-application/config.py` (shadowing — `core/ap.py`'s `import config`
-resolves to the OLED copy under the OLED app). **Hardware-unverified:** whether
-RTL8821CU actually beacons WPA2 under hostapd (the whole premise — if it won't,
-set `country_code`/`ieee80211d` in `jrescue-ap.conf`), and single-radio handoff
-release timing.
+resolves to the OLED copy under the OLED app).
+
+**Hardware-confirmed on J310:** RTL8821CU does beacon WPA2 under hostapd, the
+phone joins, and the captive sheet pops the portal. (`country_code`/`ieee80211d`
+in `jrescue-ap.conf` remain the first knob to try if a board won't beacon.)
+
+- **AP+STA concurrency is impossible on J310** — the vendor driver is built with
+  `CONFIG_CONCURRENT_MODE` commented out (`rtl8821CU/Makefile`), so
+  `CONFIG_IFACE_NUMBER 1`, no iface-combinations are advertised and a second vif
+  is refused. **Credentials therefore cannot be verified before the AP drops** —
+  a WPA2 PSK is only proven by the 4-way handshake, which needs the radio as an
+  STA. Check any other board with `iw list | sed -n '/interface combinations/,/^\t[^\t]/p'`;
+  even where it works, every combination is `#channels <= 1`, so the AP would
+  have to follow the home network's channel.
+- What we do instead: `APHandler.preflight()` rejects everything checkable
+  *without* the radio (empty/short/non-ASCII PSK, WPA-Enterprise, WEP, bad SSID)
+  so hopeless attempts cost no disconnect; failures are classified into `ERR_*`
+  codes (`classify_nmcli_error()`); and the outcome is persisted to
+  `/run/jrescue/provision-state.json` so the portal explains the failure when the
+  user rejoins the re-raised AP (`POST /api/provision/dismiss` clears it). Each
+  frontend translates the `ERR_*` code — `core/ap.py` emits no user-facing prose.
+- **`jrescue-ap.service` needs a high `StartLimitBurst`** (10): the app cycles the
+  unit once per provisioning attempt, and a low burst limit makes systemd refuse
+  to restart the AP — leaving the user with no UI at all. `_rollback()` also runs
+  `systemctl reset-failed` before retrying, and re-raises the AP *before*
+  recording the reason (else `start_ap()` overwrites it).
+- `nmcli device wifi connect` does **not** scan — `_wait_ssid_visible()` must run
+  a `--rescan yes` first, or a correct password fails with "No network with SSID
+  found" because NM's cache is empty right after it re-owns the device.
+- The scan cache is `SSID,SIGNAL,SECURITY,RSN-FLAGS,WPA-FLAGS,CHAN,FREQ`;
+  `read_scan_cache()` still tolerates the old 3-field form.
 
 ## Conventions
 

@@ -253,14 +253,38 @@ class APIHandler:
             ssid = data.get('ssid')
             password = data.get('password') or None
             if not ssid:
-                return {'success': False, 'error': 'SSID is required'}
+                return {'success': False, 'error': 'SSID is required',
+                        'error_code': ap.ERR_NO_SSID}
 
-            threading.Thread(
-                target=ap_handler.provision, args=(ssid, password), daemon=True
-            ).start()
+            # Everything checkable without the radio is checked NOW, while the
+            # phone is still attached — a rejection here costs no disconnect at
+            # all, which is the only honest form of "verify before dropping".
+            bad = ap_handler.preflight(ssid, password)
+            if bad:
+                code, reason = bad
+                return {'success': False, 'error': reason, 'error_code': code}
+
+            def run():
+                # Let the HTTP response (and its FIN) reach the phone before the
+                # AP dies — otherwise even a good POST looks like a dropped call.
+                time.sleep(1.5)
+                ap_handler.provision(ssid, password)
+
+            threading.Thread(target=run, daemon=True).start()
 
             return {'success': True, 'message': f'Joining {ssid}…'}
 
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def post_provision_dismiss(self) -> Dict[str, Any]:
+        """POST /api/provision/dismiss - acknowledge the last failure
+
+        Clears the remembered failure so the portal stops showing its banner.
+        """
+        try:
+            ap_handler.clear_error()
+            return {'success': True}
         except Exception as e:
             return {'success': False, 'error': str(e)}
 

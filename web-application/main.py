@@ -46,6 +46,9 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
+        # Captive-portal WebViews cache aggressively; a stale provisioning status
+        # would silently defeat the failure banner.
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
 
@@ -101,6 +104,8 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', os.path.getsize(file_path))
+                # The captive portal must never be served from a stale cache.
+                self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
                 self.wfile.write(f.read())
         except Exception as e:
@@ -251,6 +256,10 @@ class RescueWebHandler(http.server.BaseHTTPRequestHandler):
                 result = self.api_handler.post_provision_connect(data)
                 self.send_json_response(result)
 
+            elif path == '/api/provision/dismiss':
+                result = self.api_handler.post_provision_dismiss()
+                self.send_json_response(result)
+
             # Ethernet connects automatically - no manual endpoint needed
 
             # Flash endpoints
@@ -323,7 +332,7 @@ class CaptivePortalHandler(RescueWebHandler):
         '/api/provision/status',
         '/api/network/ap/status',
     )
-    ALLOWED_POST = ('/api/provision/connect',)
+    ALLOWED_POST = ('/api/provision/connect', '/api/provision/dismiss')
 
     def _redirect_to_portal(self) -> None:
         self.send_response(302)

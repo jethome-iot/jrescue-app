@@ -57,6 +57,8 @@ AP_URL = "http://10.42.0.1"
 CAPTIVE_PORT = 80
 AP_CREDS_FILE = "/run/jrescue/ap-creds.txt"
 AP_SCAN_CACHE = "/run/jrescue/wifi-scan.txt"
+AP_STATE_FILE = "/run/jrescue/provision-state.json"
+AP_HANDOFF_ESTIMATE_S = 60
 MDNS_HOSTNAME = "jethub.local"
 
 # Download settings

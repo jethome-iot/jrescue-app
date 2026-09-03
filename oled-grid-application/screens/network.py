@@ -68,6 +68,14 @@ def wifi_setup(menu):
             return -1  # Home
         return None  # Back
 
+    # The radio is single: while the setup-AP holds it nothing can be scanned or
+    # joined, so hand it back to NetworkManager before doing anything else.
+    import ap as ap_module
+    ap_handler = ap_module.get_ap_handler()
+    if ap_handler.is_ap_active():
+        menu.show_working(t("wifi_title"), t("ap_stopping"), 0)
+        ap_handler.release_radio()
+
     # Show scanning message
     menu.show_working(t("wifi_title"), t("wifi_scanning"), 0)
 

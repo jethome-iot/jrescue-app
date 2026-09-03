@@ -120,7 +120,8 @@ def format_time(seconds: int) -> str:
         return f"{hours}h {minutes}m"
 
 
-def run_command(cmd: List[str], check: bool = True, capture: bool = True) -> Tuple[int, str, str]:
+def run_command(cmd: List[str], check: bool = True, capture: bool = True,
+                timeout: Optional[float] = None) -> Tuple[int, str, str]:
     """
     Run a shell command and return (returncode, stdout, stderr)
 
@@ -128,6 +129,10 @@ def run_command(cmd: List[str], check: bool = True, capture: bool = True) -> Tup
         cmd: Command as list of strings
         check: Raise exception on non-zero return code
         capture: Capture output (if False, output goes to terminal)
+        timeout: seconds before the child is killed, returning (-1, "", "timed out").
+            Without it a wedged helper (e.g. nmcli stalled on D-Bus) blocks the
+            caller forever — in the provisioning path that means the setup-AP is
+            never brought back and the device becomes unreachable.
 
     Returns:
         Tuple of (returncode, stdout, stderr)
@@ -138,12 +143,15 @@ def run_command(cmd: List[str], check: bool = True, capture: bool = True) -> Tup
                 cmd,
                 capture_output=True,
                 text=True,
-                check=check
+                check=check,
+                timeout=timeout
             )
             return result.returncode, result.stdout, result.stderr
         else:
-            result = subprocess.run(cmd, check=check)
+            result = subprocess.run(cmd, check=check, timeout=timeout)
             return result.returncode, "", ""
+    except subprocess.TimeoutExpired:
+        return -1, "", "timed out"
     except subprocess.CalledProcessError as e:
         if capture:
             return e.returncode, e.stdout if e.stdout else "", e.stderr if e.stderr else ""
@@ -348,14 +356,18 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str],
         y0 += 1  # breathing row under the top border
         body_h = max(1, body_h - 1)
 
+        # One blank row between items for a small vertical gap.
+        step = 2
+        visible = max(1, body_h // step)
+
         if current_row < top:
             top = current_row
-        elif current_row >= top + body_h:
-            top = current_row - body_h + 1
-        top = max(0, min(top, max(0, len(options) - body_h)))
+        elif current_row >= top + visible:
+            top = current_row - visible + 1
+        top = max(0, min(top, max(0, len(options) - visible)))
 
         num_w = len(str(len(options)))  # align 1- vs 2-digit item numbers
-        for i in range(body_h):
+        for i in range(visible):
             idx = top + i
             if idx >= len(options):
                 break
@@ -367,16 +379,16 @@ def show_menu_interactive_curses(stdscr, title: str, options: List[str],
                 if idx == current_row:
                     attr = (curses.color_pair(1) | curses.A_BOLD) if curses.has_colors() \
                         else curses.A_REVERSE
-                    stdscr.addstr(y0 + i, x0 + 1, line, attr)
+                    stdscr.addstr(y0 + i * step, x0 + 1, line, attr)
                 elif curses.has_colors():
-                    stdscr.addstr(y0 + i, x0 + 1, line, curses.color_pair(3))
+                    stdscr.addstr(y0 + i * step, x0 + 1, line, curses.color_pair(3))
                 else:
-                    stdscr.addstr(y0 + i, x0 + 1, line)
+                    stdscr.addstr(y0 + i * step, x0 + 1, line)
             except curses.error:
                 pass
 
         # Scroll indicator for long lists (top-right corner of the dialog box)
-        if len(options) > body_h:
+        if len(options) > visible:
             pos = f"[{current_row + 1}/{len(options)}]"
             try:
                 stdscr.addstr(0, max(0, x0 + body_w - len(pos) - 1), pos)
@@ -663,10 +675,12 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str],
     top = 0
     while True:
         stdscr.erase()
-        scroll = len(lines) > 1  # recomputed against body below
+        # Only advertise scrolling when the text actually overflows the frame —
+        # _draw_frame's content area is the screen minus borders and hint bar.
+        scroll = len(lines) > max(1, stdscr.getmaxyx()[0] - 4)
         y0, x0, body_h, body_w = _draw_frame(
             stdscr, title,
-            _hint("hint_text_scroll", "↑↓ PgUp/PgDn scroll   Enter/Esc — back") if scroll
+            _hint("hint_text_scroll", "↑↓ scroll   Enter/Esc — back") if scroll
             else _hint("hint_text", "Enter/Esc — back"))
         max_top = max(0, len(lines) - body_h)
         top = min(max(0, top), max_top)
@@ -698,10 +712,6 @@ def show_text_screen_curses(stdscr, title: str, lines: List[str],
             top -= 1
         elif key == curses.KEY_DOWN:
             top += 1
-        elif key == curses.KEY_NPAGE:
-            top += body_h
-        elif key == curses.KEY_PPAGE:
-            top -= body_h
         elif key == curses.KEY_HOME:
             top = 0
         elif key == curses.KEY_END:
@@ -939,21 +949,6 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
         # string / int
         return f"    {item['label']} ({item['get']()})"
 
-    def inline_help(item):
-        stdscr.erase()
-        y0, x0, body_h, body_w = _draw_frame(stdscr, item['label'], _hint("hint_anykey", "any key — back"))
-        y = y0
-        for ln in item.get('help', 'No help available.').split('\n'):
-            if y >= y0 + body_h:
-                break
-            try:
-                stdscr.addstr(y, x0 + 1, ln[:max(0, body_w - 2)])
-            except curses.error:
-                pass
-            y += 1
-        stdscr.refresh()
-        stdscr.getch()
-
     def inline_choice(item):
         choices = item['choices']
         cur_val = item['get']()
@@ -1033,16 +1028,20 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
         stdscr.erase()
         y0, x0, body_h, body_w = _draw_frame(
             stdscr, title,
-            _hint("hint_settings", "↑↓ move   Space/Enter change   ? help   Esc back   (resets on reboot)"))
+            _hint("hint_settings", "↑↓ move   Space/Enter change   Esc back"))
         y0 += 1  # breathing row under the top border
         body_h = max(1, body_h - 1)
+
+        # One blank row between items for a small vertical gap.
+        step = 2
+        visible = max(1, body_h // step)
         if current < top:
             top = current
-        elif current >= top + body_h:
-            top = current - body_h + 1
-        top = max(0, min(top, max(0, len(items) - body_h)))
+        elif current >= top + visible:
+            top = current - visible + 1
+        top = max(0, min(top, max(0, len(items) - visible)))
 
-        for i in range(body_h):
+        for i in range(visible):
             idx = top + i
             if idx >= len(items):
                 break
@@ -1050,10 +1049,10 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
             try:
                 if idx == current and curses.has_colors():
                     stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
-                    stdscr.addstr(y0 + i, x0 + 1, line[:max(0, body_w - 2)])
+                    stdscr.addstr(y0 + i * step, x0 + 1, line[:max(0, body_w - 2)])
                     stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
                 else:
-                    stdscr.addstr(y0 + i, x0 + 1, line[:max(0, body_w - 2)])
+                    stdscr.addstr(y0 + i * step, x0 + 1, line[:max(0, body_w - 2)])
             except curses.error:
                 pass
 
@@ -1065,8 +1064,6 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
             current -= 1
         elif key == curses.KEY_DOWN and current < len(items) - 1:
             current += 1
-        elif key == ord('?') and item:
-            inline_help(item)
         elif key in (ord(' '), ord('\n'), ord('\r')) and item:
             if item['type'] == 'bool':
                 item['set'](not item['get']())

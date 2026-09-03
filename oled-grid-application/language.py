@@ -26,6 +26,7 @@ TRANSLATIONS = {
         "net_back": "Назад",
         "ap_start": "Запуск AP",
         "ap_fail": "AP не создан",
+        "ap_stopping": "Остановка AP",
 
         # WiFi menu
         "wifi_title": "WiFi",
@@ -139,6 +140,7 @@ TRANSLATIONS = {
         "net_back": "Back",
         "ap_start": "Starting AP",
         "ap_fail": "AP failed",
+        "ap_stopping": "Stopping AP",
 
         # WiFi menu
         "wifi_title": "WiFi",
