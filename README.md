@@ -16,6 +16,7 @@ Complete rescue system with three interfaces:
 - [Web Application](#-web-application)
 - [OLED Grid Application](#-oled-grid-application)
 - [Usage Examples](#-usage-examples)
+- [Updating the application](#updating-the-application)
 - [Project Structure](#-project-structure)
 
 ---
@@ -36,12 +37,39 @@ This is a professional rescue system application for **JetHub devices (J100/D1, 
 - **Three Interfaces**: Terminal (curses), browser (port 8124) and OLED display
 - **JetHome API Integration**: Automatic firmware discovery for the auto-detected board
 - **Smart Decompression**: Stream `.xz` files directly to eMMC (no extra space needed)
-- **Resume Support**: Continue interrupted downloads
+- **RAM Cleanup**: Old images are removed before every download
 - **Network Management**: Uses NetworkManager (nmcli)
-- **Recovery-Safe Flashing**: The first 336 MiB (bootloader + recovery slots) are never overwritten
+- **Recovery-Safe Flashing**: Only the 128–336 MiB recovery window is preserved; image data before and after it, including MBR/GPT, is written at its original offsets
 - **Zero Dependencies**: Only Python standard library (+ Pillow and python-evdev for OLED)
 
+Flashing expects a full-disk `.img` or `.img.xz` with OS data after 336 MiB.
+The writer replaces bytes `[0, 128 MiB)` and `[336 MiB, image end)` at their
+original offsets and never writes `[128 MiB, 336 MiB)`. Both recovery slots
+survive even when the source image contains zeros there. The target is not
+truncated or erased beyond the end of the image. MBR/GPT is copied from the
+source; an SD-card layout is not automatically converted to an eMMC layout.
+Amlogic `.burn.img` containers must not be passed to the disk-image writer.
+
 ---
+
+## Updating the application
+
+The recovery system provides `jrescue-update` to install an application archive
+and restart the interfaces. On the board:
+
+```bash
+jrescue-update http://<server>/jrescue-app.tar.gz
+```
+
+Replace the URL with the archive to install. The previous installation can be
+restored with:
+
+```bash
+jrescue-update --rollback
+```
+
+The recovery root filesystem is in RAM, so application updates last until reboot.
+Persistent updates require including the release in the recovery image.
 
 ## 💻 Console Application
 
@@ -55,10 +83,10 @@ recovery image it is started on the serial console by `jrescue-console@.service`
 - ✅ **Arrow Key Navigation** - Intuitive menu navigation with ↑↓ keys
 - ✅ **Color Output** - Visual highlighting for selected items
 - ✅ **Progress Bars** - Real-time progress with percentage and ETA
-- ✅ **Network Testing** - Built-in connectivity check to JetHome API
+- ✅ **Ethernet Status** - Interface, cable link and IP address
 - ✅ **Device Auto-Detection** - Finds all mmcblk devices automatically
 - ✅ **Smart Filtering** - Only shows flashable `sdcard` images
-- ✅ **Resume Downloads** - Continue interrupted HTTP downloads
+- ✅ **Disposable Downloads** - Fresh downloads with automatic RAM cleanup
 - ✅ **Safety Checks** - Multiple confirmations before flashing
 
 ### Running Console Application
@@ -100,27 +128,49 @@ navigation. Present on **JetHub D3 (J310)**; started there by
 - **Display**: 128x64 OLED (SSD130x family, managed by the kernel framebuffer driver)
 - **Connection**: I2C (framebuffer `/dev/fb0`)
 - **Buttons**: GPIO buttons via gpio-keys/evdev (UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME)
-- **Font Size**: 12px (optimized for readability)
+- **Fonts**: Regular weight throughout: the approved grid keeps DejaVu Sans Condensed
+  (13–14px); inner screens use bundled Liberation Sans (14px headers and body,
+  up to 19px progress numbers), with Liberation Sans Narrow keyboard glyphs up to 15px.
+  The password field uses 15px Liberation Sans Narrow text, matching the keyboard.
+  Both Liberation font files ship in application updates, without a Buildroot rebuild.
 
 ### OLED Display Examples
 
-#### Main Menu (2x2 Grid)
+#### Main Menu (2×2)
 
 ```
-┌────────────────┬────────────────┐
-│                │                │
-│     Network    │    Flash to    │
-│                │      disk      │ ← Selected (thick border)
-├────────────────┼────────────────┤
-│                │                │
-│      Info      │     Reboot     │
-│                │                │
-└────────────────┴────────────────┘
+┌──────────┐
+│ Network  │   Flash
+└──────────┘
+    Info      Settings
         128 x 64 pixels
 ```
 
-Grid cells fill the whole screen; selection is a thick border around the active
-cell. Interface language (EN/RU) is chosen on a dedicated startup screen.
+All four actions remain visible. UP/DOWN/LEFT/RIGHT selects a card without
+wrapping across edges; ENTER opens it, and HOME resets to Network. Captions are
+regular and fitted to the 128×64 panel, with wider, stronger pixel icons for the
+0.96-inch display. Settings uses a single cog icon. Info shows the firmware,
+without CPU/RAM gauges or polling.
+Inner screens use the selected 02 Liberation Sans style, plain white titles with
+a thin underline, compact text spacing and
+circular feedback. Page changes are immediate, without slide transitions.
+The password keyboard retains all layouts and controls.
+
+Future visual changes are shown as PNG and GIF previews first and applied only
+after the user selects a variant.
+
+The OLED and console interfaces start in English without a language prompt.
+The OLED opens its 2×2 main menu directly, without a startup splash or delay.
+Settings contains the English/Russian language choice and the reboot action.
+Language changes apply immediately and reset on reboot. Flash sources are API
+and USB; there is no separate RAM/downloaded-images menu.
+
+Downloaded images use the temporary RAM cache `/tmp/rescue`. Every application
+download first removes old images and partial files, then starts from zero.
+Declining the flash confirmation (NO, BACK or HOME) discards the downloaded image;
+it is also removed after the write, before the reboot screen. Failed or canceled
+transfers leave no partial file. Cleanup uses ordinary file deletion, with no
+content overwrite, and excludes USB sources and images currently being flashed.
 
 #### Network Menu
 
@@ -129,13 +179,21 @@ cell. Interface language (EN/RU) is chosen on a dedicated startup screen.
 │ Network                         │ ← Title
 ├─────────────────────────────────┤
 │                                 │
-│ ❯ WiFi                          │ ← Selected
-│   Status                        │
+│ ❯ WiFi connect                  │ ← Selected
+│   Ethernet status               │
 │                                 │
 └─────────────────────────────────┘
 ```
 
 Going back is done with the hardware BACK button (HOME jumps to the main menu).
+The two network actions are WiFi connect and Ethernet status. The setup AP is
+started automatically by the systemd boot decision; there is no Phone AP or
+manual AP start/stop item in the application. Ethernet status reports the wired
+interface, cable link, and IP in a scrollable list even when Wi-Fi is connected.
+MAC and speed are omitted.
+Wi-Fi SSID lists use 12px text; wrapped names use a 13px line pitch, keeping
+the lines close together without changing the typography of other menus.
+Other inner menus and two-line messages use a 20px line pitch instead of 25px.
 
 #### WiFi Networks List
 
@@ -151,26 +209,37 @@ Going back is done with the hardware BACK button (HOME jumps to the main menu).
 └─────────────────────────────────┘
 ```
 
-#### Grid Keyboard for Password Input
+#### Password Keyboard
 
 ```
-┌─────────────────────────────────┐
-│ Pass: mypassw                   │ ← Typed text
-├─────────────────────────────────┤
-│ a b c d e f g h                 │
-│ i j k l m n o p                 │ ← Selected: 'l'
-│ q r s t u v w x                 │
-│ y z _ Sp ← OK AB                │
-└─────────────────────────────────┘
-         ↑  ↑  ↑  ↑
-         │  │  │  └─ Mode: ab → AB → 12
-         │  │  └─ Submit
-         │  └─ Backspace
-         └─ Space
+[key] mypass|
+ q w e r t y u i o p
+  a s d f g h j k l
+ ⇧ z x c v b n m ⌫
+ 123      ␣      OK
 ```
 
-4x8 character grid. Navigation with UP/DOWN/LEFT/RIGHT buttons, ENTER to select
-a key; the mode key cycles lowercase → uppercase → numbers/symbols.
+Selecting a secured network opens the editor directly, without an extra
+confirmation. The password field has no white fill and starts at the left edge;
+long input scrolls horizontally while the full value is retained.
+
+The three QWERTY rows and separate bottom controls stay visible together, with no
+vertical scrolling. UP/DOWN/LEFT/RIGHT moves between keys and ENTER selects.
+Shift capitalizes the next letter; double Shift within 0.5 seconds locks caps.
+`123` opens numbers, `#+=` opens more symbols, and `ABC` returns to letters.
+The bracket key inserts a space, backspace deletes, and OK submits. BACK/HOME cancels.
+Space occupies 24 pixels. Special characters appear exactly once
+across the number and symbol pages. Unused positions stay blank and navigation
+skips them. `123`/`ABC`, space and OK occupy the bottom row; backspace remains at
+the right of the third row. The symbol-page toggle is at the lower left.
+The password strip is 14px high and uses a small key icon instead of `Pass:`.
+When empty, it shows only the key and a blinking caret, without placeholder text.
+Its 15px Narrow text preserves space for the input without reducing keyboard glyphs.
+UP from the top row focuses the password, LEFT/RIGHT moves the text cursor and
+scrolls the visible window, and DOWN returns to the selected key. Characters
+and backspace edit at the cursor without losing the hidden suffix or spaces.
+ENTER in the password field returns to the keyboard; only its OK key submits.
+There is no eye button or separate password-view screen.
 
 #### Connecting Animation
 
@@ -216,49 +285,23 @@ a key; the mode key cycles lowercase → uppercase → numbers/symbols.
 
 Scrolling with UP/DOWN through available firmware images.
 
-#### Download Progress
+#### Download and Flash Progress
 
-```
-┌─────────────────────────────────┐
-│ Downloading...          [  45%] │
-├─────────────────────────────────┤
-│                                 │
-│ armbian-trixie-edge             │
-│                                 │
-│ [████████░░░░░░░░░░]            │
-│ 245 / 536 MB                    │
-│ 2.3 MB/s  ⏱ 03:42               │
-│                                 │
-└─────────────────────────────────┘
-```
-
-#### Flash Progress
-
-```
-┌─────────────────────────────────┐
-│ Flashing eMMC...        [  65%] │
-├─────────────────────────────────┤
-│                                 │
-│ /dev/mmcblk1                    │
-│                                 │
-│ [█████████████░░░░░░░]          │
-│ 3.2 / 4.8 GB                    │
-│ 42 MB/s  ⏱ 00:38                │
-│                                 │
-└─────────────────────────────────┘
-```
+The OLED displays the measured percentage inside a circular progress indicator,
+with the image name on the right. Download details come from the shared core;
+the OLED omits the target device label. Unknown progress uses an animated arc.
 
 #### Confirmation Dialog
 
 ```
 ┌─────────────────────────────────┐
-│ Enter WiFi Password?            │
+│ Flash image?                    │
 ├─────────────────────────────────┤
 │                                 │
-│        MyHomeNetwork            │
+│       Erase all data?           │
 │                                 │
 │        ┌────┐   ┌────┐          │
-│        │ OK │   │ NO │          │ ← Selected: OK
+│        │ NO │   │YES │          │ ← Selected: NO
 │        └────┘   └────┘          │
 │                                 │
 └─────────────────────────────────┘
@@ -281,13 +324,20 @@ Navigate with LEFT/RIGHT buttons, ENTER to select.
 └─────────────────────────────────┘
 ```
 
+### Reboot
+
+Settings and the post-flash screen require a fresh continuous three-second hold
+of the center button. Releasing retracts the circle; Back/Left/Home cancels.
+The opening press and autorepeat do not count. The systemd reboot request is
+nonblocking, so shutdown does not wait on the application's own service.
+
 ### Features
 
-- ✅ **Grid Navigation** - 2x2 grid menu with directional buttons
-- ✅ **On-Screen Keyboard** - 4x8 character grid (lowercase/uppercase/numbers modes)
-- ✅ **Visual Feedback** - Thick borders for selection highlighting
+- ✅ **Four-Item Grid** - All four actions visible, with directional selection
+- ✅ **On-Screen Keyboard** - Full QWERTY with Shift and explicit number/symbol pages
+- ✅ **Visual Feedback** - Underlined headers, circular progress and completion animations
 - ✅ **Word Wrapping** - Automatic text wrapping for Russian/English
-- ✅ **Progress Animations** - Spinner and progress bars
+- ✅ **Progress Animations** - Circular activity and measured progress indicators
 - ✅ **Error Handling** - Wrong password retry with clear messages
 - ✅ **Multi-Language** - English and Russian support
 - ✅ **Auto-Return** - Returns to menu after 2 seconds on success
@@ -302,16 +352,17 @@ Navigate with LEFT/RIGHT buttons, ENTER to select.
 Hardware Buttons Navigation:
 
 1. Power on → Main menu appears
-2. UP/DOWN/LEFT/RIGHT → Navigate to "Network" cell
+2. UP/DOWN/LEFT/RIGHT → Navigate to "Network"
 3. ENTER → Open Network menu
 4. ENTER → Select "WiFi"
 5. Wait for scan → Select your network with UP/DOWN
-6. ENTER → Confirm
-7. Use the grid keyboard for the password:
+6. ENTER → Open password editor directly
+7. Use the QWERTY keyboard for the password:
    - UP/DOWN/LEFT/RIGHT to navigate characters
    - ENTER to type a character
-   - The mode key cycles ab → AB → 12
-   - Navigate to 'OK' and press ENTER to submit
+   - Shift for one uppercase letter; double Shift for Caps Lock
+   - 123 / #+= / ABC switch number, symbol and alphabet pages
+   - Navigate to OK and press ENTER to submit
 8. Wait for connection (2 seconds auto-return)
 9. Back in Network menu
 ```
@@ -319,23 +370,23 @@ Hardware Buttons Navigation:
 #### Example 2: Flash Firmware via OLED
 
 ```
-1. Main menu → Navigate to "Flash to disk"
+1. Main menu → Navigate to "Flash"
 2. ENTER → Open Flash menu
-3. ENTER → Select "From API" (also: "From USB", "From RAM")
+3. ENTER → Select "From API" (or "From USB")
 4. Wait for the firmware list from the JetHome API
 5. UP/DOWN → Scroll through available images
 6. ENTER → Select image
-7. ENTER → Confirm download
-8. Wait for download (progress bar shown)
+7. LEFT/RIGHT → select YES, ENTER → confirm download
+8. Wait for download (circular progress shown)
 9. LEFT/RIGHT → select YES in the NO/YES dialog, ENTER → confirm flashing
-10. Wait for flashing (progress bar shown)
-11. ENTER → Reboot now or return to menu
+10. Wait for flashing (circular progress shown)
+11. Hold center for 3 seconds to reboot, or BACK/HOME to return
 ```
 
 #### Example 3: View System Info
 
 ```
-1. Main menu → Navigate to "Info" cell
+1. Main menu → Navigate to "Info"
 2. ENTER → Display firmware name and version
 3. ENTER (OK) → Return to main menu
 ```
@@ -364,8 +415,10 @@ jrescue-app/
 ├── core/                         # Shared modules used by all frontends
 │   ├── config.py                # Settings + board auto-detection (env/device-tree)
 │   ├── network.py               # NetworkManager (nmcli) wrapper, device auto-detect
-│   ├── download.py              # JetHome API image list + HTTP downloads (resume)
+│   ├── download.py              # JetHome API + fresh RAM downloads
+│   ├── image_cache.py           # Image cleanup and active-reader coordination
 │   ├── flash.py                 # eMMC flashing (xz streaming, protected recovery region)
+│   ├── image_writer.py          # Protected streaming writer for every flash path
 │   ├── usb.py                   # USB device detection, mounting, image scan
 │   ├── utils.py                 # curses menus/dialogs, system info, helpers
 │   └── translations.py          # i18n (EN/RU)
@@ -382,11 +435,14 @@ jrescue-app/
 ├── oled-grid-application/        # 128x64 OLED UI with GPIO buttons
 │   ├── main.py                  # OLED entry point
 │   ├── display.py               # Framebuffer rendering (Pillow)
+│   ├── render.py                # Shared OLED screen drawing and geometry
 │   ├── menu.py                  # Navigation, on-screen keyboard
+│   ├── keyboard_layout.py       # QWERTY state, Shift and key geometry
+│   ├── fonts/                   # Bundled Liberation fonts and their licenses
 │   ├── input.py                 # GPIO button handler (evdev)
 │   ├── language.py              # OLED translations (EN/RU)
 │   ├── config.py                # OLED-specific configuration
-│   └── screens/                 # network / flash / info / reboot
+│   └── screens/                 # network / flash / info / settings / reboot
 │
 ├── AGENTS.md                     # Project guide for AI agents (CLAUDE.md imports it)
 └── README.md                     # This file

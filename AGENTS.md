@@ -18,9 +18,10 @@ image from the JetHome REST API, and flash it to eMMC. Three frontends share one
   The rootfs is a **RAM initramfs — nothing persists across reboot.**
 - eMMC layout: `0–4 MiB` u-boot (env at `0x380000`), recovery **slot A @132 MiB**,
   **slot B @234 MiB** (102 MiB each; A/B for self-update), **main OS ext4 @336 MiB**.
-- On a normal boot u-boot hardware-write-protects `0–336 MiB`. **Inside recovery that
+- On a normal boot u-boot requests hardware write protection of `128–336 MiB`
+  (rounded outward to the eMMC's WP-group boundaries). **Inside cold-boot recovery that
   WP is OFF** (recovery is entered by holding the button + cold boot). So the app is
-  the *only* guard against destroying the boot area / recovery slots when flashing —
+  the *only* guard against overwriting the recovery slots when flashing —
   see **Flash safety** below.
 - Boards: **J100 = D1**, **J200 = D2**, **J310 = D3**. Current target is **J100**
   (console + web; J100 has **no OLED hardware**). J310 later runs all three frontends
@@ -72,12 +73,113 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   `/api/devices/{id}/info` (only entries with a `sdcard` image, newest first) and
   downloads by full URL. There is no static server / `AVAILABLE_IMAGES` /
   `DEFAULT_SERVER` path anymore; offline flashing goes through USB.
+- **Downloaded images are disposable RAM files** in `config.TEMP_DIR` (`/tmp/rescue`).
+  Before every application download, unlink old `.img`/`.xz` images and `.partial`
+  files; never reuse/resume the RAM cache. Failed/canceled downloads remove their
+  partials. OLED/TUI discard on NO/Back/Home and after the write, before reboot
+  dialogs; web confirmations discard through `DELETE /api/flash/file`.
+  `core/image_cache.py` coordinates exclusive download/cleanup and shared flash
+  readers with a nonblocking flock, across processes and frontends. Never delete
+  an active source or mark a canceled download idle before its worker closes it.
+  Cleanup unlinks files without reading/overwriting contents or following links;
+  it does not recurse into directories or delete USB sources. Completed download
+  identities keep repeated cleanup from deleting a replacement at the same path.
+  Explicit generic download destinations outside the cache still support resume.
+- **OLED and console start in English.** Language selection and reboot live in
+  Settings, with no startup language screen or separate RAM image source.
+  OLED opens the 2×2 main menu directly, without a Rescue/version splash or delay.
+  OLED's four-item grid is Network / Flash / Info / Settings. Downloads use only the API's
+  `images.sdcard` raw `.img`/`.img.xz` entry; burn and RAUC files are excluded.
+- **OLED uses the approved 2×2 main grid with HAOS-style inner screens.**
+  UP/DOWN/LEFT/RIGHT selects a card without wrapping across edges, ENTER opens
+  it, and HOME resets selection to the first card. All four captions remain
+  visible, in 13–14px regular type: the user dislikes bold main-menu captions.
+  Selection uses a frame, with the same font weight in every card.
+  The pixel-drawn icons are up to 21px wide with
+  stronger strokes for the 0.96-inch screen. Settings uses one 15px cog with eight
+  teeth and a clear center hole, replacing the old slider icon at the user's request.
+  There is no main header or telemetry
+  polling. **Do not restore CPU/RAM gauges:** Info shows the firmware only.
+  All OLED text uses regular weight, including headers and selected rows.
+  Inner screens use bundled Liberation Sans Regular; the keyboard uses bundled
+  Liberation Sans Narrow Regular. Main captions keep system DejaVu Sans Condensed.
+  Inner headers are 14px white on black with a thin underline, body text 14px,
+  keyboard glyphs up to 15px, progress up to 19px. Body text was reduced by 1px
+  at the user's request; preserve header, main-grid and keyboard sizes.
+  Do not restore inverse headers.
+  Wi-Fi SSID lists use 12px regular names; a wrapped name has 13px line pitch.
+  Other inner lists, messages, progress and hold screens use 20px line pitch
+  instead of the previous 25px; confirmation buttons sit 2px closer to the text.
+  Keep list measuring and drawing in sync
+  with `compact=True` through Menu, DisplayManager and OledRenderer.
+  Text uses two compact rows, with glyphs centered inside confirmation frames.
+  Pages update in one write with no slide transitions. **The main grid is fixed:**
+  do not restyle it while changing inner screens.
+- **The password editor is phone-style QWERTY**, with all three letter rows and
+  a separate bottom control row visible at once. `keyboard_layout.py` shares state and geometry
+  between navigation and rendering. Shift affects one letter; double Shift within
+  0.5 seconds locks caps. `123`, `#+=` and `ABC` switch directly between layouts.
+  Space, backspace and OK remain visible, with no vertical keyboard scrolling.
+  The space key is 24px wide. Each special
+  character appears exactly once across the number/symbol pages, with no quick
+  duplicates among the controls. `None` slots are invisible and skipped by navigation;
+  never insert repeated characters to fill the screen.
+  The password field uses 14px of height and 15px Liberation Sans Narrow text,
+  with a small key icon instead of a permanent `Pass:` label.
+  Empty input contains no `Password` placeholder: only the key and a caret that
+  blinks every 0.5 seconds. Keyboard input uses a timed wait so blinking remains
+  on the UI thread; any real button press makes the caret visible again.
+  The three letter rows remain 14px each, with unchanged character glyph sizes.
+  The bottom control row is 8px high, with `123`/`ABC`, space and OK in their
+  previous positions; its captions are 11px. `#+=`/`123` toggles symbol pages at
+  the left of row three. All 32 punctuation characters occur once across those
+  two pages. Navigation uses the same rectangles as the renderer.
+  UP from the top keyboard row focuses the password; LEFT/RIGHT moves its
+  insertion cursor and DOWN returns to the same selected key. ENTER while the
+  field is focused returns to the keys; only the explicit OK key submits.
+  Insert/delete acts at the cursor and preserves hidden suffixes and spaces.
+  The field is unfilled; arrows indicate hidden input on either side, without
+  changing the actual password. Selecting a secured SSID opens this editor
+  directly, without an extra NO/YES step. Back/Home still cancel safely.
+- **Visual changes require PNG and GIF previews first.** The user explicitly
+  requested preview → user selection → implementation. Further visual changes
+  need their previews chosen first. Keep the **02_haos** inner style, with no
+  eMMC label on Flash and with the Wi-Fi password keyboard retained.
+  The user approved restoring the 2×2 grid and requested more legible icons.
+  Preview scripts are local development aids and are not part of the repository.
+  **Keep only the latest generated previews** in `~/jrescue-oled-previews/`:
+  the user explicitly requested deleting previous versions because they were
+  hard to find. Update `02_haos/` in place and remove superseded generated
+  variant folders; do not maintain duplicate historical copies to preserve old
+  links. Keep the latest main files directly in the root as `01-menu.png`,
+  `02-wifi-keyboard.png`, `03-demo.gif`, and `04-wifi.gif`, with a short README;
+  `05-inner-menus.png` shows the current inner-screen typography.
+  `06-wifi-networks.png` shows compact short and wrapped SSIDs in ENG/RUS.
+  The user approved trying the four-row password-cursor preview; it is now
+  implemented. The user rejected an eye button and a separate password overview:
+  do not add them. Further symbol/footer variants still require preview selection.
+  The user approved **02 Liberation Sans**; its plain titles and keyboard glyphs
+  are implemented. Keep only the current design in the preview folder.
+  Font binaries and their individual licenses live in `oled-grid-application/fonts/`
+  and ship with app-only updates; do not depend on a board-side font installation.
+- **OLED reboot requires a fresh continuous three-second center hold**, both
+  in Settings and after flashing. The opening press and key autorepeat do not
+  count; release rolls back, and Back/Left/Home cancel. Lost button state must
+  never trigger a reboot. Flash/download confirmations still default to NO.
+  Keep the nonblocking systemd
+  reboot request so shutdown cannot wait on the application's own service.
+  Blocking network/download/flash operations still draw only on the UI thread
+  and use one joined worker through `Menu.run_working` / `run_progress`.
+- **Network menus expose WiFi connect and Ethernet status only.** The setup AP
+  is raised by systemd boot scripts; there is no Phone AP / manual AP action.
+  Direct Wi-Fi connect still releases the single radio from an active AP.
+  Ethernet status screens show interface, cable link and IP; omit MAC and speed.
 - **The console UI is curses-only, including waits and progress.** Menus/dialogs:
   `show_menu`, `show_horizontal_menu`, `input_dialog`, `confirm_action`; screens:
   `show_text_screen` (scrollable report), `show_wait_screen` (spinner around a
   blocking call, captures its stdout), `show_progress_screen` (bar; runs a
   `worker(progress)` in a thread), `show_confirm_screen` (info + NO/YES),
-  `show_settings_screen` (menuconfig-style; declarative bool/choice/string/int
+  `show_settings_screen` (menuconfig-style; declarative bool/choice/string/int/action
   items with get/set callables — runtime-only, resets on reboot). All in
   `core/utils.py`; Python `curses` is guaranteed via `select BR2_PACKAGE_PYTHON3_CURSES`.
   Esc = cancel. Do NOT add plain `print`/`press_enter` steps between curses screens —
@@ -102,17 +204,20 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
 
 ## Flash safety (CRITICAL)
 
-`core/flash.py` writes the OS image with a **masked write**: it skips
-`config.RECOVERY_PROTECT_MB` (**336 MiB**) on **both** input and output
-(`iflag=fullblock,skip_bytes` / `oflag=seek_bytes`), preserving u-boot, its env, and
-both recovery slots. This is required because flashing runs **inside recovery where WP
-is off** — a naïve whole-disk `dd` from sector 0 would overwrite the bootloader and
-recovery slots and brick the recovery path itself.
+`core/flash.py` uses `core/image_writer.py` for **every** write path (pv/xz
+pipelines and Python fallback). It writes image byte X to eMMC byte X except
+inside `[RECOVERY_PROTECT_START_MB, RECOVERY_PROTECT_END_MB)` = **[128, 336) MiB**.
+The input bytes in that window are consumed, and the target is seeked over without
+writing or truncating it. Both recovery slots stay intact; image data below
+128 MiB (including MBR/GPT and any boot/environment data there) is replaced.
 
-- Never remove the offset from the `dd` pipeline (or the equivalent seek in the
-  pure-Python lzma fallback).
-- It assumes a **full-disk source image** built with `OFFSET=336` (image byte X → eMMC
-  byte X). Set `RECOVERY_PROTECT_MB = 0` only for non-recovery targets (blank SD card).
+- Never bypass the protected writer. Cold-boot recovery does not arm hardware WP.
+- The writer opens the existing target without truncation, locks it against other
+  writers, checks short writes, and fsyncs before reporting success.
+- Protection settings are mandatory: missing or invalid bounds must fail closed.
+- It assumes a compatible **full-disk source image** with OS data beyond 336 MiB
+  (image byte X → eMMC byte X). It does not convert SD MBR layouts into eMMC GPT.
+  Set **both** bounds to 0 only for non-recovery targets (blank SD card).
 - `SKIP_MOUNT_CHECK` must stay **`False`** in *every* `config.py` (shadowing — see above).
 
 ## Wi-Fi setup-AP provisioning
@@ -143,15 +248,14 @@ NM/wpa_supplicant APs up **OPEN**.
   runs a second captive HTTP server on **`10.42.0.1:80`** *only while the AP is up*
   (OS captive probes only hit :80) serving `static/portal.html`; endpoints
   `/api/provision/{networks,connect,status}` + `/api/network/ap/status`. Console
-  `provision_ap()` and OLED `screens/network.py: ap_setup` surface the SSID/PSK/
-  URL as text (no QR — illegible on the 0.96" panel).
+  and OLED do not start the setup AP; its lifecycle starts in systemd, while the
+  web portal handles the AP-to-STA handoff and rollback through those services.
 
 AP creds are the **static** `jethub`/`jethub123` (WPA2) for now — a per-device
 `sha256(mac)` scheme was considered and deferred. The web API stays
 unauthenticated; WPA2 + tearing the AP down on STA success bound the exposure.
-`AP_*` constants live in `core/config.py` **and** are mirrored in
-`oled-grid-application/config.py` (shadowing — `core/ap.py`'s `import config`
-resolves to the OLED copy under the OLED app).
+`AP_*` constants live in `core/config.py`; the web and OLED configs import the
+shared settings so their shadowing copies also expose all safety and AP flags.
 
 **Hardware-confirmed on J310:** RTL8821CU does beacon WPA2 under hostapd, the
 phone joins, and the captive sheet pops the portal. (`country_code`/`ieee80211d`
@@ -197,6 +301,10 @@ in `jrescue-ap.conf` remain the first knob to try if a board won't beacon.)
 
 - Syntax: `python3 -m py_compile <files>` (or every `.py`).
 - Import smoke test: `PYTHONPATH=core python3 -c "import config, utils, network, download, flash, usb"`.
+- If the local development test harness is available, run
+  `python3 -m unittest discover -s tests -v` (temporary files only; covers actual
+  128/336 MiB boundaries and pv/xz/Python paths). The harness and preview tools
+  stay local and are not committed at the user's request.
 - There is **no hardware here** — flash / nmcli / mount paths cannot be fully exercised
   locally. Reason carefully and call out any path you could not actually run.
 
