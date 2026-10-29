@@ -60,10 +60,7 @@ def show_system_info(menu):
     if not pretty:
         pretty = info.get("kernel", "Unknown")[:18]
 
-    # Keep it simple and readable on 128x64: 2 lines max
-    info_text = pretty[:18]
-
-    # Show info
-    result = menu.show_message(t("info_title"), info_text, wait_for_key=True)
+    # The renderer wraps by pixel width, allowing two readable lines.
+    result = menu.show_message(t("info_title"), pretty, wait_for_key=True)
     return result  # Returns -1 if HOME pressed, None otherwise
 

@@ -3,25 +3,32 @@ Language/Translation Support for OLED Application
 Supports Russian and English
 """
 
-# Current language (default to Russian)
-current_language = "RUS"
+# Language changes are runtime-only; every boot starts in English.
+current_language = "ENG"
 
 # Translation dictionary
 TRANSLATIONS = {
     "RUS": {
         # Main menu
         "main_network": "Сеть",
-        "main_flash": "Запись eMMC",
-        "main_flash_grid": "Запись\nна диск",  # For grid menu (2 lines)
-        "main_info": "Инфор\nмация",  # For grid menu (2 lines)
-        "main_reboot": "Пере\nзагр.",  # For grid menu (2 lines)
+        "main_flash": "Запись",
+        "main_info": "Инфо",
+        "main_settings": "Настр.",
+        "main_images": "Образы",
+        "main_no_network": "Нет сети",
+        "keyboard_password": "Пароль",
+        "settings_title": "Настройки",
+        "settings_language": "Язык",
 
         # Network menu
         "net_title": "Сеть",
         "net_test": "Статус",
-        "net_wifi": "WiFi",
-        "net_ap": "Смартфон",
-        "net_ethernet": "Ethernet",
+        "net_wifi": "Подключить WiFi",
+        "net_ethernet": "Статус Ethernet",
+        "eth_missing": "Нет Ethernet",
+        "eth_link": "Кабель",
+        "eth_up": "Подключён",
+        "eth_down": "Отключён",
         "net_ip": "IP адрес",
         "net_back": "Назад",
         "ap_start": "Запуск AP",
@@ -51,17 +58,16 @@ TRANSLATIONS = {
         "eth_back": "Назад",
 
         # Flash menu
-        "flash_title": "Запись eMMC",
+        "flash_title": "Запись",
         "flash_api": "Из API",
         "flash_usb": "С USB",
-        "flash_ram": "Из RAM",
         "flash_list": "Список",
         "flash_back": "Назад",
         "flash_select": "Выбор образа",
         "flash_confirm_download": "Скачать?",
         "flash_downloaded": "Скачан",
-        "flash_confirm_flash": "Записать на eMMC?",
-        "flash_warning": "Все данные будут стерты!",
+        "flash_confirm_flash": "Записать?",
+        "flash_warning": "Стереть всё?",
         "flash_downloading": "Скачивание",
         "flash_confirm": "Записать?",
         "flash_progress": "Запись",
@@ -85,22 +91,19 @@ TRANSLATIONS = {
         "usb_no_images": "Нет образов на USB",
         "usb_safe_remove": "Можно извлечь USB",
 
-        # RAM (downloaded) images
-        "ram_title": "Образы в RAM",
-        "ram_no_images": "Нет скачанных образов",
-        "ram_action": "Выберите действие",
-        "ram_flash": "Прошить",
-        "ram_delete": "Удалить",
-        "ram_deleted": "Удалено",
-
         "info": "Инфо",
 
         # Reboot menu
         "reboot_title": "Перезагрузка",
+        "reboot_short": "Рестарт",
         "reboot_now": "Сейчас",
         "reboot_cancel": "Отмена",
         "reboot_confirm": "Перезагрузить?",
         "reboot_wait": "Перезагрузка...",
+        "reboot_hold_center": "Удержи",
+        "reboot_hold_time": "центр 3с",
+        "reboot_input_failed": "Нет связи с кнопками",
+        "reboot_failed": "Ошибка перезагрузки",
 
         # Info screen
         "info_title": "Информация",
@@ -125,17 +128,24 @@ TRANSLATIONS = {
     "ENG": {
         # Main menu
         "main_network": "Network",
-        "main_flash": "Flash eMMC",
-        "main_flash_grid": "Flash\nto disk",  # For grid menu (2 lines)
+        "main_flash": "Flash",
         "main_info": "Info",
-        "main_reboot": "Reboot",
+        "main_settings": "Settings",
+        "main_images": "Images",
+        "main_no_network": "No network",
+        "keyboard_password": "Password",
+        "settings_title": "Settings",
+        "settings_language": "Language",
 
         # Network menu
         "net_title": "Network",
         "net_test": "Status",
-        "net_wifi": "WiFi",
-        "net_ap": "Phone AP",
-        "net_ethernet": "Ethernet",
+        "net_wifi": "WiFi connect",
+        "net_ethernet": "Ethernet status",
+        "eth_missing": "No Ethernet",
+        "eth_link": "Link",
+        "eth_up": "Up",
+        "eth_down": "Down",
         "net_ip": "IP Address",
         "net_back": "Back",
         "ap_start": "Starting AP",
@@ -165,17 +175,16 @@ TRANSLATIONS = {
         "eth_back": "Back",
 
         # Flash menu
-        "flash_title": "Flash eMMC",
+        "flash_title": "Flash",
         "flash_api": "From API",
         "flash_usb": "From USB",
-        "flash_ram": "From RAM",
         "flash_list": "List",
         "flash_back": "Back",
         "flash_select": "Select Image",
         "flash_confirm_download": "Download?",
         "flash_downloaded": "Downloaded",
-        "flash_confirm_flash": "Flash to eMMC?",
-        "flash_warning": "All data will be erased!",
+        "flash_confirm_flash": "Flash image?",
+        "flash_warning": "Erase all data?",
         "flash_downloading": "Downloading",
         "flash_confirm": "Flash?",
         "flash_progress": "Flashing",
@@ -199,22 +208,19 @@ TRANSLATIONS = {
         "usb_no_images": "No images on USB",
         "usb_safe_remove": "Safe to remove USB",
 
-        # RAM (downloaded) images
-        "ram_title": "Images in RAM",
-        "ram_no_images": "No downloaded images",
-        "ram_action": "Choose action",
-        "ram_flash": "Flash",
-        "ram_delete": "Delete",
-        "ram_deleted": "Deleted",
-
         "info": "Info",
 
         # Reboot menu
         "reboot_title": "Reboot",
+        "reboot_short": "Reboot",
         "reboot_now": "Now",
         "reboot_cancel": "Cancel",
         "reboot_confirm": "Reboot?",
         "reboot_wait": "Rebooting...",
+        "reboot_hold_center": "Hold center",
+        "reboot_hold_time": "for 3 s",
+        "reboot_input_failed": "Buttons unavailable",
+        "reboot_failed": "Reboot failed",
 
         # Info screen
         "info_title": "Information",

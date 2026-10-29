@@ -18,15 +18,11 @@ import config as oled_config
 import language
 
 # Import screen modules
-from screens import network, flash, info, reboot
+from screens import network, flash, info, settings
 
-import importlib.util as _ilu
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'core'))
-_core_config_path = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), '..', 'core', 'config.py')
-_spec = _ilu.spec_from_file_location('rescue_core_config', _core_config_path)
-src_config = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(src_config)
+# The OLED config inherits every shared setting, including detected board and
+# flash protection. Keep one config object throughout this frontend.
+src_config = oled_config
 
 
 def initialize():
@@ -43,10 +39,6 @@ def initialize():
         # Initialize display
         print("Initializing OLED display...")
         display = DisplayManager()
-
-        # Show splash screen
-        display.draw_splash(oled_config.APP_NAME, src_config.APP_VERSION)
-        time.sleep(2)
 
         # Initialize input
         print("Initializing input handler...")
@@ -69,25 +61,9 @@ def initialize():
         return None
 
 
-def select_language(menu):
-    """Language selection screen"""
-    lang_items = [
-        language.TRANSLATIONS["RUS"]["lang_russian"],
-        language.TRANSLATIONS["ENG"]["lang_english"]
-    ]
-
-    choice = menu.show_menu("", lang_items)  # No title, just languages
-
-    if choice == 0:
-        language.set_language("RUS")
-        return "RUS"
-    else:
-        language.set_language("ENG")
-        return "ENG"
-
-
 def main():
     """Main application loop"""
+    language.set_language("ENG")
     # Ensure temp directory exists
     os.makedirs(src_config.TEMP_DIR, exist_ok=True)
     print(f"Using temp directory: {src_config.TEMP_DIR}")
@@ -100,26 +76,21 @@ def main():
 
     display, input_handler, menu = result
 
-    # Language selection
-    print("Language selection...")
-    selected_lang = select_language(menu)
-    print(f"Language set to: {selected_lang}")
-
-    # Main menu items for grid (translated, with line breaks for long text)
+    # Keep the labels current after a language change in Settings.
     def get_main_items():
         return [
-            language.t("main_network"),           # Top-left (0)
-            language.t("main_flash_grid"),        # Top-right (1)
-            language.t("main_info"),              # Bottom-left (2)
-            language.t("main_reboot")             # Bottom-right (3)
-    ]
+            language.t("main_network"),
+            language.t("main_flash"),
+            language.t("main_info"),
+            language.t("main_settings")
+        ]
 
     print("Starting main loop...")
 
     # Main loop
     try:
         while True:
-            choice = menu.show_grid_menu(get_main_items())
+            choice = menu.show_main_menu(get_main_items())
 
             if choice is None or choice == -1:
                 # Back/Home pressed - already in main menu, continue
@@ -143,8 +114,7 @@ def main():
                     # HOME pressed - return to main menu
                     continue
             elif choice == 3:
-                # Reboot
-                result = reboot.reboot_system(menu)
+                result = settings.settings_menu(menu)
                 if result == -1:
                     # HOME pressed - return to main menu
                     continue

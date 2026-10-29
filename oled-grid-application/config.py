@@ -2,6 +2,19 @@
 Configuration file for OLED Rescue Console Application
 """
 
+import importlib.util
+import os
+
+# Core modules can resolve `import config` to this module. Inherit shared
+# settings rather than maintaining a second, incomplete set of safety flags.
+_core_config_path = os.path.join(os.path.dirname(__file__), '..', 'core', 'config.py')
+_spec = importlib.util.spec_from_file_location('oled_core_config', _core_config_path)
+_core_config = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_core_config)
+for _name in dir(_core_config):
+    if _name.isupper():
+        globals()[_name] = getattr(_core_config, _name)
+
 # ==================== OLED DISPLAY SETTINGS ====================
 
 # Framebuffer Settings (OLED managed by kernel driver ssd130x-i2c)
@@ -11,62 +24,25 @@ OLED_HEIGHT = 64
 
 # ==================== DISPLAY SETTINGS ====================
 
-# Display Settings
-FONT_SMALL = 12   # For menu items (readable)
-FONT_NORMAL = 14  # For titles
-
-# Fallback font paths (try in order)
-FONT_PATHS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"
+# Keep the approved main grid independent of inner-screen typography.
+MAIN_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansCondensed.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansCondensed.ttf"
 ]
+_font_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+FONT_PATHS = [os.path.join(_font_dir, 'LiberationSans-Regular.ttf')] + MAIN_FONT_PATHS
+KEYBOARD_FONT_PATHS = [os.path.join(_font_dir, 'LiberationSansNarrow-Regular.ttf')] + FONT_PATHS
+FONT_BOLD_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansCondensed-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansCondensed-Bold.ttf"
+]
+OLED_ANIMATION_FPS = 8
 
-# Text Settings
-MAX_LINE_LENGTH = 18  # Characters per line at font size 12 (128px / 7px per char)
-TEXT_TRUNCATE = "..."
+# ==================== OLED-SPECIFIC OVERRIDES ====================
 
-# ==================== DEVICE SETTINGS ====================
-
-# Board device id / platform is auto-detected in core config
-# (env override -> /proc/device-tree/model -> fallback). This app no longer
-# overrides it, so the right images are pulled for whatever board it runs on.
-
-# Hardware devices
-EMMC_DEVICE = "/dev/mmcblk1"
-WIFI_INTERFACE = "wlan0"
-ETHERNET_INTERFACE = "eth0"
-USB_MOUNT_POINT = "/mnt/usb"
-
-# Storage paths (tmpfs = RAM, не изнашивает flash и быстрее)
-TEMP_DIR = "/tmp/rescue"
-
-# JetHome API
-JETHOME_API_BASE = "https://fw.jethome.com"
-
-# Network
 NETWORK_TIMEOUT = 30
-
-# WiFi setup-AP provisioning. This standalone OLED config does NOT import core,
-# so these MUST mirror core/config.py — core/ap.py resolves `import config` to
-# THIS module when running under the OLED app (sys.modules shadowing), so the
-# constants it reads must exist here too.
-AP_SERVICE = "jrescue-ap.service"
-AP_ADDR = "10.42.0.1"
-AP_URL = "http://10.42.0.1"
-CAPTIVE_PORT = 80
-AP_CREDS_FILE = "/run/jrescue/ap-creds.txt"
-AP_SCAN_CACHE = "/run/jrescue/wifi-scan.txt"
-AP_STATE_FILE = "/run/jrescue/provision-state.json"
-AP_HANDOFF_ESTIMATE_S = 60
-MDNS_HOSTNAME = "jethub.local"
-
-# Download settings
-DD_BLOCK_SIZE = 4  # MB
-DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
-
-# Advanced settings
-SKIP_MOUNT_CHECK = False  # Only True for testing on a non-recovery host
 SILENT_CONSOLE = True  # Disable all console output (logs only to file)
 VERBOSE_LOGS = False  # Disable verbose logging
 

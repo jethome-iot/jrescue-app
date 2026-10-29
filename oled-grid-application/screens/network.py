@@ -26,11 +26,12 @@ def network_menu(menu):
     Returns:
         -1 if HOME pressed, None otherwise
     """
-    items = [t("net_wifi"), t("net_ap"), t("net_test")]
+    items = [t("net_wifi"), t("net_ethernet")]
 
     while True:
         # Use select_from_list instead of show_menu for scrolling support and consistency
-        choice = menu.select_from_list(t("net_title"), items, show_index=False, show_counter=False)
+        choice = menu.select_from_list(t("net_title"), items, show_index=False,
+                                       show_counter=False)
 
         if choice is None:
             return None  # Back
@@ -41,13 +42,9 @@ def network_menu(menu):
             if result == -1:
                 return -1  # Propagate HOME to main menu
         elif choice == 1:
-            result = ap_setup(menu)
+            result = ethernet_status(menu)
             if result == -1:
-                return -1  # Propagate HOME to main menu
-        elif choice == 2:
-            result = test_connectivity(menu)
-            if result == -1:
-                return -1  # Propagate HOME to main menu
+                return -1
 
 
 def wifi_setup(menu):
@@ -73,14 +70,9 @@ def wifi_setup(menu):
     import ap as ap_module
     ap_handler = ap_module.get_ap_handler()
     if ap_handler.is_ap_active():
-        menu.show_working(t("wifi_title"), t("ap_stopping"), 0)
-        ap_handler.release_radio()
+        menu.run_working(t("wifi_title"), t("ap_stopping"), ap_handler.release_radio)
 
-    # Show scanning message
-    menu.show_working(t("wifi_title"), t("wifi_scanning"), 0)
-
-    # Scan for networks
-    networks = handler.scan_wifi()
+    networks = menu.run_working(t("wifi_title"), t("wifi_scanning"), handler.scan_wifi)
 
     if not networks:
         result = menu.show_message(t("wifi_title"), "No networks\nfound")
@@ -92,7 +84,8 @@ def wifi_setup(menu):
     ssids = [net['ssid'] for net in networks]
 
     # Select network (with counter to show total number of networks)
-    selected = menu.select_from_list(t("wifi_select"), ssids, show_index=True, show_counter=True)
+    selected = menu.select_from_list(t("wifi_select"), ssids, show_index=True,
+                                     show_counter=True, compact=True)
 
     if selected is None:
         return None  # Cancelled
@@ -106,16 +99,7 @@ def wifi_setup(menu):
     if network['security'] != "Open":
         # Loop for password retry on failure
         while True:
-            # Ask for password confirmation with horizontal choice
-            title = f"{ssid[:15]}\n{t('wifi_password')}?"
-            choice = menu.horizontal_choice(title, "NO", "OK")
-
-            if choice is None or choice == 0:
-                return None  # Cancelled or NO selected
-            elif choice == -1:
-                return -1  # Home
-
-            # Get password
+            # Selecting a secured network opens the editor directly.
             password = menu.input_text(t("wifi_password"), "")
 
             if password is None:
@@ -124,17 +108,17 @@ def wifi_setup(menu):
                 return -1  # Home
 
             # Connect
-            menu.show_working(t("wifi_connecting"), f"{ssid[:18]}", 0)
-            success = handler.connect_wifi(ssid, password)
+            success = menu.run_working(t("wifi_connecting"), ssid,
+                                       handler.connect_wifi, ssid, password)
 
             if success:
                 # Success - show message for 2 seconds and return to Network menu
-                menu.show_message(t("wifi_connected"), f"{ssid[:18]}", wait_for_key=False)
+                menu.show_message(t("wifi_connected"), f"{ssid}", wait_for_key=False, success=True)
                 time.sleep(2)  # Show success message for 2 seconds
                 return  # Exit to Network menu
             else:
                 # Failed - show error with OK button, then retry
-                error_msg = f"{t('wifi_failed')}\n{ssid[:15]}\n{t('wifi_wrong_password')}"
+                error_msg = f"{t('wifi_failed')}\n{ssid}\n{t('wifi_wrong_password')}"
                 result = menu.show_message(t("error"), error_msg)
                 if result == -1:
                     return -1  # Home
@@ -142,107 +126,35 @@ def wifi_setup(menu):
     else:
         # Open network - no password needed
         password = None
-        menu.show_working(t("wifi_connecting"), f"{ssid[:18]}", 0)
-        success = handler.connect_wifi(ssid, password)
+        success = menu.run_working(t("wifi_connecting"), ssid,
+                                   handler.connect_wifi, ssid, password)
 
         if success:
-            menu.show_message(t("wifi_connected"), f"{ssid[:18]}", wait_for_key=False)
+            menu.show_message(t("wifi_connected"), f"{ssid}", wait_for_key=False, success=True)
             time.sleep(2)  # Show success message for 2 seconds
         else:
-            menu.show_message(t("wifi_failed"), f"{ssid[:18]}")
+            menu.show_message(t("wifi_failed"), f"{ssid}")
 
 
-def ap_setup(menu):
-    """
-    Raise the Wi-Fi setup-AP and show how to provision from a phone: join the AP
-    with the shown SSID/password, then open the web portal at http://10.42.0.1 to
-    pick the home Wi-Fi. (No QR — it's not legible on the 0.96" panel; the text is.)
-
-    Returns:
-        -1 if HOME pressed, None otherwise
-    """
-    import ap as ap_module
-
-    handler = ap_module.get_ap_handler()
-
-    menu.show_working(t("net_ap"), t("ap_start"), 0)
-    if not handler.is_ap_active():
-        handler.start_ap()
-
-    # jrescue-ap-up writes the creds file early but waits for the (USB) radio to
-    # enumerate — poll briefly so we can show the SSID/PSK.
-    creds = {}
-    for _ in range(20):
-        creds = handler.read_creds()
-        if creds.get('ssid'):
-            break
-        time.sleep(0.5)
-
-    if not handler.is_ap_active():
-        result = menu.show_message(t("error"), t("ap_fail"))
-        return -1 if result == -1 else None
-
-    ssid = creds.get('ssid') or 'jethub'
-    psk = creds.get('psk') or 'jethub123'
-    addr = creds.get('addr') or '10.42.0.1'
-
-    # show_message waits for a key and returns -1 on HOME.
-    result = menu.show_message(t("net_ap"), "WiFi: %s\nKey: %s\n%s" % (ssid, psk, addr))
-    return -1 if result == -1 else None
-
-    display._update_display()
-
-
-def test_connectivity(menu):
-    """
-    Test connectivity to JetHome API
-
-    Args:
-        menu: Menu instance
-
-    Returns:
-        -1 if HOME pressed, None otherwise
-    """
+def ethernet_status(menu):
+    """Show wired link/IP details, independently of active Wi-Fi or the AP."""
     handler = get_network_handler()
     if not handler:
-        result = menu.show_message(t("error"), "NetworkManager\nnot found")
-        if result == -1:
-            return -1  # Home
-        return None  # Back
-
-    # Show testing message
-    menu.show_working(t("net_test"), t("wait"), 0)
-    time.sleep(0.5)
-
-    # Get all interfaces
-    interfaces = handler.get_all_interfaces()
-
-    if not interfaces:
-        result = menu.show_message(t("error"), "No active\nconnections")
-        if result == -1:
-            return -1  # Home
-        return None  # Back
-
-    # Build list of interface info strings for selection
-    # Format: interface on first line, IP on second line (no indent)
-    interface_items = []
-    for iface in interfaces:
-        if iface['ssid']:
-            # WiFi with SSID - interface, IP, then SSID
-            interface_items.append(f"{iface['interface']}:\n{iface['ip']} {iface['ssid']}")
-        else:
-            # Ethernet or WiFi without SSID - interface, then IP
-            interface_items.append(f"{iface['interface']}:\n{iface['ip']}")
-
-    # Show list with scroll and numbering (if more than 1 interface)
-    if len(interface_items) == 1:
-        # Single interface - show directly
-        menu.show_message(t("net_test"), interface_items[0])
+        return menu.show_message(t('error'), "NetworkManager\nnot found")
+    devices = menu.run_working(t('net_ethernet'), t('wait'), handler.get_ethernet_status)
+    if not devices:
+        return menu.show_message(t('net_ethernet'), t('eth_missing'))
+    if len(devices) > 1:
+        choice = menu.select_from_list(t('net_ethernet'),
+                                       [device['interface'] for device in devices],
+                                       show_index=False, show_counter=False)
+        if choice is None or choice == -1:
+            return choice
+        device = devices[choice]
     else:
-        # Multiple interfaces - show as scrollable list
-        selected = menu.select_from_list(t("net_test"), interface_items)
-        # User just views the list, no action needed
-        # But if HOME pressed (-1), exit to main menu
-        if selected == -1:
-            return -1  # Home
-
+        device = devices[0]
+    carrier = device['carrier']
+    link = t('eth_up') if carrier is True else t('eth_down') if carrier is False else '--'
+    result = menu.show_network_status(t('net_ethernet'), device['interface'],
+                                      t('eth_link') + ': ' + link, device['ip'] or '--')
+    return -1 if result == -1 else None

@@ -12,8 +12,9 @@ import os
 import mmap
 import fcntl
 import struct
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import config
+from render import OledRenderer
 
 # Linux framebuffer ioctls (include/uapi/linux/fb.h)
 FBIOGET_VSCREENINFO = 0x4600
@@ -76,9 +77,10 @@ class DisplayManager:
             self.image = Image.new('1', (self.width, self.height))
             self.draw = ImageDraw.Draw(self.image)
 
-            # Load fonts
-            self.font_small = self._load_font(config.FONT_SMALL)
-            self.font_normal = self._load_font(config.FONT_NORMAL)
+            self.renderer = OledRenderer(self.width, self.height,
+                                          config.FONT_PATHS, config.FONT_BOLD_PATHS,
+                                          config.MAIN_FONT_PATHS, config.KEYBOARD_FONT_PATHS)
+            self._last_frame = None
 
             # Clear display on init
             self.clear()
@@ -101,96 +103,12 @@ class DisplayManager:
         except Exception as e:
             print(f"Warning: Could not activate framebuffer: {e}")
 
-    def _load_font(self, size):
-        """Load font, trying multiple paths"""
-        for font_path in config.FONT_PATHS:
-            if os.path.exists(font_path):
-                try:
-                    return ImageFont.truetype(font_path, size)
-                except Exception:
-                    continue
-        # Fallback to default font
-        return ImageFont.load_default()
-
-    def _truncate(self, text, max_length):
-        """Truncate text to max length (legacy, use _wrap_text instead)"""
-        if len(text) <= max_length:
-            return text
-        return text[:max_length - len(config.TEXT_TRUNCATE)] + config.TEXT_TRUNCATE
-
-    def _wrap_text(self, text, max_width, first_line_indent=False):
-        """
-        Wrap text to fit within max_width characters per line.
-        Returns list of lines.
-
-        Args:
-            text: Text to wrap
-            max_width: Maximum characters per line
-            first_line_indent: If True, first line uses max_width, others use full width (18)
-        """
-        if not text:
-            return ['']
-
-        text = str(text)
-
-        # If text contains newlines, split by them first
-        if '\n' in text:
-            existing_lines = text.split('\n')
-            all_lines = []
-            for idx, line in enumerate(existing_lines):
-                # First line uses max_width (for numbering), subsequent lines use full width
-                if first_line_indent and idx == 0:
-                    line_width = max_width
-                else:
-                    # Subsequent lines can use full width (18 chars at 128px width)
-                    line_width = 18 if first_line_indent else max_width
-                wrapped = self._wrap_single_line(line, line_width)
-                all_lines.extend(wrapped)
-            return all_lines if all_lines else ['']
-        else:
-            # No newlines - just wrap normally
-            return self._wrap_single_line(text, max_width)
-
-    def _wrap_single_line(self, text, max_width):
-        """Wrap a single line of text"""
-        if not text:
-            return ['']
-
-        words = text.split(' ')
-        lines = []
-        current_line = ''
-
-        for word in words:
-            # If word alone is longer than max_width, split it
-            if len(word) > max_width:
-                if current_line:
-                    lines.append(current_line)
-                    current_line = ''
-                # Split long word into chunks
-                for i in range(0, len(word), max_width):
-                    lines.append(word[i:i+max_width])
-                continue
-
-            # Try adding word to current line
-            test_line = current_line + (' ' if current_line else '') + word
-
-            if len(test_line) <= max_width:
-                current_line = test_line
-            else:
-                # Current line is full, start new line
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-
-        # Add last line
-        if current_line:
-            lines.append(current_line)
-
-        return lines if lines else ['']
-
     def _update_display(self):
         """Write the PIL image to the framebuffer in its native pixel format."""
         try:
+            logical = self.image.tobytes()
+            if logical == self._last_frame:
+                return
             if self.bpp_bits == 1:
                 row_bytes = (self.width + 7) // 8
                 src = self.image.tobytes('raw', '1;R')
@@ -219,6 +137,7 @@ class DisplayManager:
             self.fb_mmap.seek(0)
             self.fb_mmap.write(raw_data)
             self.fb_mmap.flush()
+            self._last_frame = logical
 
             # Force sync (optional, may improve reliability)
             try:
@@ -234,468 +153,78 @@ class DisplayManager:
         self.draw.rectangle((0, 0, self.width, self.height), fill=0)
         self._update_display()
 
+    def _present(self, image):
+        """Write one complete frame, without intermediate transition frames."""
+        self.image = image
+        self.draw = ImageDraw.Draw(image)
+        self.draw.fontmode = '1'
+        self._update_display()
+
     def draw_text_screen(self, lines, selected_index=-1):
-        """Draw text screen with optional selection highlight"""
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
+        """Render a compact text list with the shared fonts."""
+        self._present(self.renderer.menu('', lines, selected_index, compact=True))
 
-        y = 0
-        line_height = 14  # For font size 12
+    def draw_menu(self, title, items, selected_index, compact=False, right=''):
+        """Render outlined menu rows and a separate header counter/board label."""
+        self._present(self.renderer.menu(title, items, selected_index, compact, right))
 
-        for i, line in enumerate(lines[:4]):  # Max 4 lines (font is bigger)
-            # Truncate if needed
-            text = self._truncate(str(line), config.MAX_LINE_LENGTH)
+    def draw_main_menu(self, items, selected_index):
+        """Show all four actions in one complete frame, with no transitions."""
+        self._present(self.renderer.main_menu(items, selected_index))
 
-            # Highlight selected line
-            if i == selected_index:
-                # Draw filled rectangle for highlight
-                self.draw.rectangle((0, y, self.width, y + line_height), fill=1)
-                # Draw inverted text
-                self.draw.text((0, y), text, font=self.font_small, fill=0)
-            else:
-                # Normal text
-                self.draw.text((0, y), text, font=self.font_small, fill=1)
+    def draw_list(self, title, items, selected, current_num, total_num,
+                  first_visible_num=1, can_scroll_up=False, can_scroll_down=False,
+                  show_index=True, show_counter=True, icons=None, compact=False):
+        """Render list pages whose geometry is also used by navigation."""
+        image = self.renderer.list_screen(
+            title, items, selected, current_num, total_num, first_visible_num,
+            can_scroll_up, can_scroll_down, show_index, show_counter, icons, compact)
+        self._present(image)
 
-            y += line_height
+    def list_item_height(self, item, show_index=False, icon=None, compact=False):
+        """Expose pixel-based pagination without duplicating drawing rules."""
+        return self.renderer.list_item_height(item, show_index, icon, compact)
 
-        self._update_display()
+    def draw_message(self, title, message, wait_for_key=True):
+        """Draw status text and its optional acknowledgement button."""
+        self._present(self.renderer.message(title, message, button=wait_for_key))
 
-    def draw_menu(self, title, items, selected_index):
-        """Draw menu with title and items"""
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
+    def draw_success(self, title, message, fraction=1, button=True):
+        """Animate completion only after the operation actually succeeds."""
+        self._present(self.renderer.success(title, message, fraction, button))
 
-        y = 0
-
-        # Draw title separator if title provided (same font size as items)
-        if title:
-            self.draw.text((0, y), self._truncate(title, config.MAX_LINE_LENGTH),
-                          font=self.font_small, fill=1)
-            y += 14
-            self.draw.line((0, y, self.width, y), fill=1)
-            y += 2
-            row_spacing = 15  # With title, normal spacing
-        else:
-            # No title, no separator - menu starts at very top
-            y = 0
-            row_spacing = 14  # Without title, tighter spacing to fit 4 items
-
-        # Draw menu items
-        for i, item in enumerate(items[:4]):  # Max 4 items for font size 12
-            # Check if we're still within screen bounds (text at y+1, font 12px + descenders ~4px = 20px safe margin)
-            if y + 20 > self.height:
-                break
-
-            text = self._truncate(str(item), config.MAX_LINE_LENGTH)
-
-            if i == selected_index:
-                # Highlight selected item
-                self.draw.rectangle((0, y, self.width, y + 14), fill=1)
-                self.draw.text((2, y + 1), text, font=self.font_small, fill=0)
-            else:
-                self.draw.text((2, y + 1), text, font=self.font_small, fill=1)
-
-            y += row_spacing
-
-        self._update_display()
-
-    def draw_grid_menu(self, items, selected_row, selected_col):
-        """Draw 2x2 grid menu with centered text and border highlight"""
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
-
-        # Grid dimensions
-        cell_width = self.width // 2  # 64px
-        cell_height = self.height // 2  # 32px
-
-        # Draw 2x2 grid
-        for row in range(2):
-            for col in range(2):
-                idx = row * 2 + col
-                if idx >= len(items):
-                    continue
-
-                # Calculate cell position
-                x = col * cell_width
-                y = row * cell_height
-
-                # Get item text
-                item_text = str(items[idx])
-
-                # Check if selected
-                is_selected = (row == selected_row and col == selected_col)
-
-                # Calculate safe bottom boundary (must not reach 64px!)
-                # For bottom row: 32 + 32 = 64, so limit to 62
-                max_y = min(y + cell_height - 1, self.height - 2)
-                max_x = x + cell_width - 1
-
-                # Draw border
-                if is_selected:
-                    # Draw very thick border (multiple rectangles for 4px effect)
-                    # All rectangles must stay within screen bounds
-                    self.draw.rectangle((x, y, max_x, max_y),
-                                       outline=1, fill=0)
-                    self.draw.rectangle((x + 1, y + 1, max_x - 1, max(y + 1, max_y - 1)),
-                                       outline=1, fill=0)
-                    self.draw.rectangle((x + 2, y + 2, max_x - 2, max(y + 2, max_y - 2)),
-                                       outline=1, fill=0)
-                    # Optional: invert inner area for even more emphasis
-                    # self.draw.rectangle((x + 3, y + 3, max_x - 3, max(y + 3, max_y - 3)),
-                    #                    outline=0, fill=1)
-                else:
-                    # Draw thin border (1px)
-                    self.draw.rectangle((x, y, max_x, max_y),
-                                       outline=1, fill=0)
-
-                # Draw centered text (split lines if needed)
-                lines = item_text.split('\n') if '\n' in item_text else [item_text]
-
-                # Calculate text position (centered) - use 9px spacing for tighter fit
-                line_spacing = 9
-                # For top row (y=0): start from very top. For bottom row: shift up more
-                if row == 0:
-                    # Top row - minimal top margin (2px)
-                    text_y_start = y + 2
-                else:
-                    # Bottom row - shift up to avoid overflow
-                    text_y_start = y + (cell_height - len(lines) * line_spacing) // 2 - 4
-
-                for i, line in enumerate(lines[:2]):  # Max 2 lines per cell
-                    # Calculate text y position
-                    text_y = text_y_start + i * line_spacing
-
-                    # VERY STRICT check: text must fit COMPLETELY within cell AND screen bounds
-                    # text_y + font(12) + descenders(4) + safety(2) = text_y + 18
-                    # Also check against cell bottom boundary
-                    if text_y + 18 > min(y + cell_height, self.height):
-                        break  # Don't draw text that goes beyond cell or screen
-
-                    # Truncate if too long (max ~8 chars for 64px width)
-                    truncated = self._truncate(line, 8)
-
-                    # Estimate text width (rough approximation: 7px per char for font 12)
-                    text_width = len(truncated) * 7
-                    text_x = x + (cell_width - text_width) // 2
-
-                    self.draw.text((text_x, text_y), truncated,
-                                  font=self.font_small, fill=1)
-
-        self._update_display()
-
-    def draw_message(self, title, message, wait_for_key=False):
-        """Draw message screen with OK button at bottom"""
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
-
-        y = 0
-
-        # Draw title if provided
-        if title:
-            self.draw.text((0, y), self._truncate(title, config.MAX_LINE_LENGTH),
-                          font=self.font_small, fill=1)
-            y += 14
-            self.draw.line((0, y, self.width, y), fill=1)
-            y += 2
-
-        # Reserve space for OK button at bottom (20px for button position)
-        max_message_height = self.height - 20
-
-        # Message lines with automatic text wrapping
-        # Pass entire message to _wrap_text to preserve newline logic
-        # Use 18 chars width (no numbering in messages, can use full width)
-        all_wrapped_lines = self._wrap_text(str(message), 18, first_line_indent=False)
-
-        # Display lines, leaving space for OK button
-        for text_line in all_wrapped_lines:
-            # Check if current line will fit (use 14 for line height like in lists)
-            if y + 14 > max_message_height:
-                break
-            self.draw.text((0, y), text_line, font=self.font_small, fill=1)
-            y += 14
-
-        # Draw OK button at bottom center (same style as horizontal_choice)
-        button_y = self.height - 20
-        button_text = "OK"
-        button_height = 16
-
-        # Calculate button size
-        bbox = self.draw.textbbox((0, 0), button_text, font=self.font_small)
-        text_width = bbox[2] - bbox[0]
-        button_width = text_width + 16  # Add padding
-
-        # Center button horizontally
-        button_x = (self.width - button_width) // 2
-
-        # Draw filled rectangle (selected style)
-        self.draw.rectangle((button_x, button_y, button_x + button_width, button_y + button_height),
-                          fill=1, outline=1)
-
-        # Draw text centered in button (inverted colors)
-        text_x = button_x + (button_width - text_width) // 2
-        text_y = button_y + (button_height - 10) // 2
-        self.draw.text((text_x, text_y), button_text, font=self.font_small, fill=0)
-
-        self._update_display()
-
-    def draw_progress(self, title, message, percent=None):
-        """Draw progress screen with centered progress bar and percentage on top"""
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
-
-        y = 0
-
-        # Draw title if provided
-        if title:
-            self.draw.text((0, y), self._truncate(title, config.MAX_LINE_LENGTH),
-                          font=self.font_small, fill=1)
-            y += 14
-            self.draw.line((0, y, self.width, y), fill=1)
-            y += 2
-
-        # Progress bar and percentage in center
-        if percent is not None:
-            # Calculate center position
-            # Screen height = 64px, after title = ~48px available
-            # Put percentage and bar in vertical center
-
-            # Percentage text (on top)
-            pct_text = f"{int(percent)}%"
-            bbox = self.draw.textbbox((0, 0), pct_text, font=self.font_small)
-            text_width = bbox[2] - bbox[0]
-            pct_x = (self.width - text_width) // 2
-            pct_y = 24  # Vertical position for percentage
-
-            self.draw.text((pct_x, pct_y), pct_text, font=self.font_small, fill=1)
-
-            # Progress bar (below percentage, centered)
-            bar_height = 12
-            bar_y = pct_y + 16  # 16px below percentage
-            bar_width = int((self.width - 4) * (percent / 100))
-
-            # Bar outline
-            self.draw.rectangle((0, bar_y, self.width - 1, bar_y + bar_height),
-                              outline=1, fill=0)
-
-            # Filled bar (only draw if width is enough to avoid coordinate errors)
-            if bar_width > 2:  # Must be > 2 because bar starts at x=2
-                self.draw.rectangle((2, bar_y + 2, bar_width, bar_y + bar_height - 2),
-                                  fill=1)
-
-        self._update_display()
+    def draw_progress(self, title, message, percent=None, detail=''):
+        """Show actual operation progress; unknown progress uses the spinner."""
+        if percent is None:
+            self.draw_spinner(title, message, 0)
+            return
+        self._present(self.renderer.progress(title, message, percent, detail))
 
     def draw_spinner(self, title, message, frame=0):
-        """Draw spinner animation"""
-        spinner_chars = ['|', '/', '-', '\\']
-        spinner = spinner_chars[frame % 4]
+        """Show a circular activity indicator."""
+        self._present(self.renderer.spinner(title, message, frame))
 
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
+    def draw_network_status(self, title, interface, link, ip):
+        """Show interface, link and a large address together on one page."""
+        self._present(self.renderer.network_status(title, interface, link, ip))
 
-        y = 0
-
-        # Draw title with spinner if provided
-        if title:
-            title_text = f"{self._truncate(title, config.MAX_LINE_LENGTH - 2)} {spinner}"
-            self.draw.text((0, y), title_text, font=self.font_small, fill=1)
-            y += 14
-            self.draw.line((0, y, self.width, y), fill=1)
-            y += 2
-
-        # Message with automatic text wrapping
-        max_lines = 3 if title else 4  # More space without title
-
-        # Pass entire message to _wrap_text to preserve newline logic
-        all_wrapped_lines = self._wrap_text(str(message), config.MAX_LINE_LENGTH, first_line_indent=False)
-
-        # Display up to max_lines
-        for text_line in all_wrapped_lines[:max_lines]:
-            if y + 15 > self.height:
-                break
-            self.draw.text((0, y), text_line, font=self.font_small, fill=1)
-            y += 15
-
-        self._update_display()
+    def draw_hold_confirmation(self, title, line1, line2, percent=0):
+        """Show a center-button hold, including its rollback after release."""
+        self._present(self.renderer.hold_confirmation(title, line1, line2, percent))
 
     def draw_splash(self, title, version):
-        """Draw splash screen (same font size for all)"""
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
-
-        # Centered title (same font as items)
-        title_text = self._truncate(title, config.MAX_LINE_LENGTH)
-        title_width = len(title_text) * 6  # Approximate
-        x = (self.width - title_width) // 2
-        self.draw.text((x, 20), title_text, font=self.font_small, fill=1)
-
-        # Version
-        version_text = self._truncate(version, config.MAX_LINE_LENGTH)
-        version_width = len(version_text) * 5
-        x = (self.width - version_width) // 2
-        self.draw.text((x, 35), version_text, font=self.font_small, fill=1)
-
-        self._update_display()
+        """Show the app version and detected board using the shared typography."""
+        self._present(self.renderer.splash(title, version, config.JETHOME_DEVICE.upper()))
 
     def draw_horizontal_choice(self, title, option1, option2, selected):
-        """
-        Draw horizontal choice dialog (for OK/NO selection)
+        """Keep the existing safe default and confirmation controls."""
+        self._present(self.renderer.horizontal_choice(title, option1, option2, selected))
 
-        Args:
-            title: Dialog title (can be multi-line with \n)
-            option1: First option text (left)
-            option2: Second option text (right)
-            selected: Selected option index (0 or 1)
-        """
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
-
-        y = 2
-
-        # Draw title (support multi-line)
-        title_lines = title.split('\n')
-        for line in title_lines[:2]:  # Max 2 lines for title
-            text = self._truncate(line, config.MAX_LINE_LENGTH)
-            self.draw.text((2, y), text, font=self.font_small, fill=1)
-            y += 14
-
-        y += 6  # Extra spacing before buttons
-
-        # Draw horizontal buttons at bottom
-        button_y = self.height - 20
-        button_width = (self.width - 6) // 2  # Two buttons with 2px gap
-        button_height = 16
-
-        # Left button (option1)
-        x1_left = 2
-        x2_left = x1_left + button_width
-        if selected == 0:
-            # Filled background for selected
-            self.draw.rectangle((x1_left, button_y, x2_left, button_y + button_height),
-                              fill=1, outline=1)
-            # Calculate text centering
-            bbox = self.draw.textbbox((0, 0), option1, font=self.font_small)
-            text_width = bbox[2] - bbox[0]
-            text_x = x1_left + (button_width - text_width) // 2
-            text_y = button_y + (button_height - 10) // 2
-            self.draw.text((text_x, text_y), option1, font=self.font_small, fill=0)
-        else:
-            # Just outline for unselected
-            self.draw.rectangle((x1_left, button_y, x2_left, button_y + button_height),
-                              fill=0, outline=1)
-            bbox = self.draw.textbbox((0, 0), option1, font=self.font_small)
-            text_width = bbox[2] - bbox[0]
-            text_x = x1_left + (button_width - text_width) // 2
-            text_y = button_y + (button_height - 10) // 2
-            self.draw.text((text_x, text_y), option1, font=self.font_small, fill=1)
-
-        # Right button (option2)
-        x1_right = x2_left + 2
-        x2_right = self.width - 2
-        if selected == 1:
-            # Filled background for selected
-            self.draw.rectangle((x1_right, button_y, x2_right, button_y + button_height),
-                              fill=1, outline=1)
-            bbox = self.draw.textbbox((0, 0), option2, font=self.font_small)
-            text_width = bbox[2] - bbox[0]
-            text_x = x1_right + (button_width - text_width) // 2
-            text_y = button_y + (button_height - 10) // 2
-            self.draw.text((text_x, text_y), option2, font=self.font_small, fill=0)
-        else:
-            # Just outline for unselected
-            self.draw.rectangle((x1_right, button_y, x2_right, button_y + button_height),
-                              fill=0, outline=1)
-            bbox = self.draw.textbbox((0, 0), option2, font=self.font_small)
-            text_width = bbox[2] - bbox[0]
-            text_x = x1_right + (button_width - text_width) // 2
-            text_y = button_y + (button_height - 10) // 2
-            self.draw.text((text_x, text_y), option2, font=self.font_small, fill=1)
-
-        self._update_display()
-
-    def draw_keyboard(self, password, grid, cursor_row, cursor_col, hint=""):
-        """
-        Draw on-screen keyboard with 4x8 grid layout
-
-        Args:
-            password: Current password string
-            grid: 4x8 array of characters/buttons
-            cursor_row: Selected row (0-3)
-            cursor_col: Selected column (0-7)
-            hint: Optional hint text (e.g., SSID)
-        """
-        # Clear entire screen first (PIL Image)
-        from PIL import Image, ImageDraw
-        self.image = Image.new('1', (self.width, self.height), color=0)
-        self.draw = ImageDraw.Draw(self.image)
-
-        # Top bar - show "Pass: " + password
-        y = 0
-        # "Pass: " takes ~30px, leaving ~98px for password (about 16 chars at font 12)
-        max_pwd_len = 12  # Max characters to show
-        password_display = password if len(password) <= max_pwd_len else password[-max_pwd_len:]
-        pwd_text = f"Pass: {password_display}_"
-        self.draw.text((0, y), pwd_text, font=self.font_small, fill=1)
-        y += 13
-
-        # Separator line
-        self.draw.line((0, y, self.width - 1, y), fill=1)
-        y += 2
-
-        # Keyboard grid (49px remaining: 64 - 13 - 2 = 49)
-        # 4 rows, each row 12px high (48px total, 1px gap at bottom)
-        cell_width = self.width // 8  # 128 / 8 = 16px per cell
-        cell_height = 12  # Height per row
-
-        grid_start_y = y
-
-        for row in range(4):
-            for col in range(8):
-                cell_x = col * cell_width
-                cell_y = grid_start_y + row * cell_height
-
-                # Get character/button text
-                char = grid[row][col] if grid[row][col] else ""
-
-                # Check if this cell is selected
-                is_selected = (row == cursor_row and col == cursor_col)
-
-                if is_selected:
-                    # Draw selection with thick border
-                    # Draw 2px border around cell
-                    self.draw.rectangle((cell_x, cell_y, cell_x + cell_width - 1,
-                                       cell_y + cell_height - 1), outline=1, width=2)
-
-                # Draw character centered in cell
-                if char:
-                    # Get accurate text bounding box
-                    bbox = self.draw.textbbox((0, 0), char, font=self.font_small)
-                    text_width = bbox[2] - bbox[0]
-                    text_height = bbox[3] - bbox[1]
-
-                    # Center text in cell
-                    text_x = cell_x + (cell_width - text_width) // 2
-                    text_y = cell_y + (cell_height - text_height) // 2 - bbox[1]
-
-                    # Draw text
-                    self.draw.text((text_x, text_y), char, font=self.font_small, fill=1)
-
-        self._update_display()
+    def draw_keyboard(self, password, grid, cursor_row, cursor_col, hint='', shift=0,
+                      state=None, cursor_visible=True):
+        """Show the full keyboard and its selected key without vertical scrolling."""
+        self._present(self.renderer.keyboard(password, grid, cursor_row, cursor_col, hint, shift,
+                                             state=state, cursor_visible=cursor_visible))
 
     def cleanup(self):
         """Clean up resources"""

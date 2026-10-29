@@ -3,7 +3,10 @@ Menu Logic and Navigation for OLED Interface
 """
 
 from input import KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACK, KEY_HOME, KEY_LEFT, KEY_RIGHT
+import threading
+import time
 import config
+from language import t
 
 
 class Menu:
@@ -21,8 +24,9 @@ class Menu:
         self.input = input_handler
         self.current_index = 0
         self.menu_stack = []  # For navigation history
+        self._main_selection = 0
 
-    def show_menu(self, title, items):
+    def show_menu(self, title, items, compact=False, right='', initial_index=0):
         """
         Show menu and return selected index or None for back
 
@@ -33,10 +37,12 @@ class Menu:
         Returns:
             Selected index (0-based) or None for back
         """
-        self.current_index = 0
+        if not items:
+            return None
+        self.current_index = min(max(0, initial_index), len(items)-1)
 
         while True:
-            self.display.draw_menu(title, items, self.current_index)
+            self.display.draw_menu(title, items, self.current_index, compact=compact, right=right)
             key = self.input.wait_for_key()
 
             if key == KEY_UP:
@@ -57,49 +63,32 @@ class Menu:
             elif key == KEY_HOME:
                 return -1  # Go to main menu
 
-    def show_grid_menu(self, items):
-        """
-        Show 2x2 grid menu and return selected index or None for back
-
-        Args:
-            items: List of 4 menu item strings (can have \n for multi-line)
-
-        Returns:
-            Selected index (0-based) or None for back
-        """
-        # Grid position (row, col)
-        row = 0
-        col = 0
-
+    def show_main_menu(self, items):
+        """Navigate the four-item grid without wrapping across its edges."""
+        if not items:
+            return None
+        self._main_selection = min(self._main_selection, len(items)-1)
         while True:
-            self.display.draw_grid_menu(items, row, col)
+            selected = self._main_selection
+            self.display.draw_main_menu(items, selected)
             key = self.input.wait_for_key()
-
-            if key == KEY_UP:
-                # Move up (stop at edge)
-                if row > 0:
-                    row -= 1
-            elif key == KEY_DOWN:
-                # Move down (stop at edge)
-                if row < 1:
-                    row += 1
-            elif key == KEY_LEFT:
-                # Move left (stop at edge)
-                if col > 0:
-                    col -= 1
-            elif key == KEY_RIGHT:
-                # Move right (stop at edge)
-                if col < 1:
-                    col += 1
+            if key == KEY_UP and selected >= 2:
+                self._main_selection -= 2
+            elif key == KEY_DOWN and selected+2 < len(items):
+                self._main_selection += 2
+            elif key == KEY_LEFT and selected % 2 == 1:
+                self._main_selection -= 1
+            elif key == KEY_RIGHT and selected % 2 == 0 and selected+1 < len(items):
+                self._main_selection += 1
             elif key == KEY_ENTER:
-                # Return linear index: row * 2 + col
-                return row * 2 + col
+                return selected
             elif key == KEY_BACK:
-                return None  # Go back
+                return None
             elif key == KEY_HOME:
-                return -1  # Go to main menu
+                self._main_selection = 0
+                return -1
 
-    def show_message(self, title, message, wait_for_key=True):
+    def show_message(self, title, message, wait_for_key=True, success=False):
         """
         Show message screen
 
@@ -111,12 +100,23 @@ class Menu:
         Returns:
             -1 if HOME pressed, None otherwise
         """
-        self.display.draw_message(title, message)
+        if success:
+            for frame in range(5):
+                self.display.draw_success(title, message, frame/4, wait_for_key)
+                if frame < 4:
+                    time.sleep(1/config.OLED_ANIMATION_FPS)
+        else:
+            self.display.draw_message(title, message, wait_for_key=wait_for_key)
         if wait_for_key:
             key = self.input.wait_for_key()
             if key == KEY_HOME:
                 return -1
         return None
+
+    def show_network_status(self, title, interface, link, ip):
+        """Display a compact wired status page until acknowledgement or Home."""
+        self.display.draw_network_status(title, interface, link, ip)
+        return -1 if self.input.wait_for_key() == KEY_HOME else None
 
     def confirm(self, title, message=None):
         """
@@ -135,7 +135,7 @@ class Menu:
             if msg_result == -1:
                 return -1
 
-        items = ["No", "Yes"]
+        items = [t('no'), t('yes')]
         result = self.show_menu(title, items)
         if result == -1:
             return -1  # Home
@@ -174,7 +174,7 @@ class Menu:
             elif key == KEY_HOME:
                 return -1  # Go to main menu
 
-    def show_progress(self, title, message, percent=None):
+    def show_progress(self, title, message, percent=None, detail=''):
         """
         Show progress screen (non-blocking)
 
@@ -183,7 +183,58 @@ class Menu:
             message: Progress message
             percent: Optional progress percentage (0-100)
         """
-        self.display.draw_progress(title, message, percent)
+        self.display.draw_progress(title, message, percent, detail)
+
+    def hold_to_confirm(self, title, line1, line2, seconds=3.0):
+        """Require a fresh continuous center hold; releases reset the action."""
+        self.display.draw_hold_confirmation(title, line1, line2, 0)
+        self.input.flush_events()
+        armed = KEY_ENTER not in self.input.get_pressed_keys()
+        started = None
+        rollback = None
+
+        def progress(now):
+            if started is not None:
+                return min(100, 100*(now-started)/seconds)
+            if rollback is not None:
+                value, released = rollback
+                return max(0, value*(1-(now-released)/0.3))
+            return 0
+
+        try:
+            while True:
+                events = self.input.read_key_events(timeout=0.1)
+                now = time.monotonic()
+                for code, value in events:
+                    if value == 1 and code == KEY_HOME:
+                        return -1
+                    if value == 1 and code in (KEY_BACK, KEY_LEFT):
+                        return None
+                    if code != KEY_ENTER or value == 2:
+                        continue
+                    if value == 0:
+                        if started is not None:
+                            rollback = (progress(now), now)
+                            started = None
+                        armed = True
+                    elif value == 1 and armed and started is None:
+                        started, rollback, armed = now, None, False
+
+                # Also check the real key state before completing a hold: a
+                # missed release event must never cause an unintended reboot.
+                if KEY_ENTER not in self.input.get_pressed_keys():
+                    if started is not None:
+                        rollback = (progress(now), now)
+                        started = None
+                    armed = True
+                percent = progress(now)
+                self.display.draw_hold_confirmation(title, line1, line2, percent)
+                if started is not None and percent >= 100:
+                    return True
+                if rollback is not None and percent <= 0:
+                    rollback = None
+        finally:
+            self.input.flush_events()
 
     def show_working(self, title, message, frame=0):
         """
@@ -196,100 +247,83 @@ class Menu:
         """
         self.display.draw_spinner(title, message, frame)
 
+    def run_working(self, title, message, worker, *args, **kwargs):
+        """Animate a blocking operation without running any drawing in its thread."""
+        return self._run_operation(title, message, lambda report: worker(*args, **kwargs), False)
+
+    def run_progress(self, title, message, worker):
+        """Run worker(progress_cb) once and draw its actual progress on the UI thread."""
+        return self._run_operation(title, message, worker, True)
+
+    def _run_operation(self, title, message, worker, use_progress):
+        """Keep the operation alive even if drawing fails; never start it twice."""
+        done = threading.Event()
+        lock = threading.Lock()
+        state = {'percent': None, 'lines': (), 'result': None, 'error': None}
+
+        def report(percent, *lines):
+            with lock:
+                state['percent'], state['lines'] = percent, lines
+
+        def run():
+            try:
+                state['result'] = worker(report)
+            except Exception as exc:
+                state['error'] = exc
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        frame = 0
+        try:
+            while not done.is_set():
+                with lock:
+                    percent, lines = state['percent'], state['lines']
+                if use_progress and percent is not None:
+                    self.show_progress(title, message, percent, str(lines[-1]) if lines else '')
+                else:
+                    self.show_working(title, message, frame)
+                frame += 1
+                done.wait(1 / config.OLED_ANIMATION_FPS)
+            if use_progress and state['percent'] is not None and state['error'] is None:
+                self.show_progress(title, message, state['percent'],
+                                   str(state['lines'][-1]) if state['lines'] else '')
+        finally:
+            thread.join()
+            self.input.flush_events()
+        if state['error'] is not None:
+            raise state['error']
+        return state['result']
+
     def input_text(self, title, prompt="", initial=""):
-        """
-        On-screen keyboard for text input with 4x8 grid layout
+        """Edit a password using the full QWERTY keyboard and explicit mode keys."""
+        from keyboard_layout import KeyboardState
 
-        Args:
-            title: Input screen title (shown in password bar)
-            prompt: Optional hint text (e.g., SSID name)
-            initial: Initial text value
-
-        Returns:
-            Entered text or None if cancelled
-        """
-        from language import t
-
-        # Define keyboard layouts (4 rows x 8 columns)
-        KEYBOARD_LOWERCASE = [
-            ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'],
-            ['i', 'j', 'k', 'l', 'm', 'n', 'o', 'p'],
-            ['q', 'r', 's', 't', 'u', 'v', 'w', 'x'],
-            ['y', 'z', '_', 'Sp', '←', 'OK', 'AB', '']
-        ]
-
-        KEYBOARD_UPPERCASE = [
-            ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
-            ['I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'],
-            ['Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X'],
-            ['Y', 'Z', '_', 'Sp', '←', 'OK', '12', '']
-        ]
-
-        KEYBOARD_NUMBERS = [
-            ['0', '1', '2', '3', '4', '5', '6', '7'],
-            ['8', '9', '!', '@', '#', '$', '%', '^'],
-            ['&', '*', '(', ')', '-', '+', '=', '_'],
-            ['.', '/', 'Sp', '←', 'OK', 'ab', '', '']
-        ]
-
-        keyboards = [KEYBOARD_LOWERCASE, KEYBOARD_UPPERCASE, KEYBOARD_NUMBERS]
-
-        # State
-        password = initial
-        mode = 0  # 0=lowercase, 1=uppercase, 2=numbers
-        cursor_row = 0
-        cursor_col = 0
-
+        state = KeyboardState(initial)
+        directions = {KEY_UP: 'up', KEY_DOWN: 'down', KEY_LEFT: 'left', KEY_RIGHT: 'right'}
+        blink_started = time.monotonic()
         while True:
-            # Get current keyboard
-            current_keyboard = keyboards[mode]
-
-            # Draw keyboard
-            self.display.draw_keyboard(password, current_keyboard, cursor_row, cursor_col, prompt)
-
-            # Wait for input
-            key = self.input.wait_for_key()
-
-            if key == KEY_UP:
-                if cursor_row > 0:
-                    cursor_row -= 1
-            elif key == KEY_DOWN:
-                if cursor_row < 3:
-                    cursor_row += 1
-            elif key == KEY_LEFT:
-                if cursor_col > 0:
-                    cursor_col -= 1
-            elif key == KEY_RIGHT:
-                if cursor_col < 7:
-                    cursor_col += 1
-            elif key == KEY_ENTER:
-                # Select current cell
-                char = current_keyboard[cursor_row][cursor_col]
-
-                if char == 'Sp':
-                    # Add space
-                    password += ' '
-                elif char == '←':
-                    # Backspace
-                    if password:
-                        password = password[:-1]
-                elif char == 'OK':
-                    # Done - return password
-                    return password if password else None
-                elif char in ['AB', '12', 'ab']:
-                    # Switch mode: ab → AB → 12 → ab
-                    mode = (mode + 1) % 3
-                elif char and char not in ['']:
-                    # Add character
-                    password += char
+            phase = (time.monotonic()-blink_started)/0.5
+            self.display.draw_keyboard(state.value, state.rows, state.row, state.col,
+                                       t('keyboard_password'), state.shift, state=state,
+                                       cursor_visible=int(phase) % 2 == 0)
+            key = self.input.wait_for_key(timeout=max(0.01, (1-phase % 1)*0.5))
+            if key is None:
+                continue
+            blink_started = time.monotonic()
+            if key == KEY_ENTER:
+                if state.activate():
+                    return state.value or None
             elif key == KEY_BACK:
-                # Cancel
                 return None
             elif key == KEY_HOME:
-                # Go to main menu
                 return -1
+            elif key in directions:
+                state.move(directions[key])
 
-    def select_from_list(self, title, items, show_index=True, show_counter=True):
+    def select_from_list(self, title, items, show_index=True, show_counter=True, icons=None,
+                         compact=False):
         """
         Select from a list with scrolling (title always on top)
 
@@ -298,6 +332,7 @@ class Menu:
             items: List of items to select from
             show_index: If True, show index numbers (default: True)
             show_counter: If True, show "1/10" counter in title (default: True)
+            compact: Use smaller names and closer wrapped lines for Wi-Fi SSIDs
 
         Returns:
             Selected index or None if cancelled
@@ -310,30 +345,27 @@ class Menu:
         selected = 0
         scroll_offset = 0
 
-        # Calculate max visible items dynamically based on actual heights
-        # Pre-calculate heights for all items
-        max_text_width = config.MAX_LINE_LENGTH - 2 if show_index else config.MAX_LINE_LENGTH
-        item_heights = []
-        for item in items:
-            wrapped = self.display._wrap_text(str(item), max_text_width, first_line_indent=show_index)[:2]
-            item_heights.append(len(wrapped) * 14)
+        item_heights = [self.display.list_item_height(item, show_index,
+                                                     icons[index] if icons else None, compact=compact)
+                        for index, item in enumerate(items)]
+
+        def count_visible(offset):
+            available = self.display.height - self.display.renderer.BODY_TOP
+            used = 0
+            count = 0
+            for height in item_heights[offset:]:
+                if used + height > available:
+                    break
+                used += height
+                count += 1
+            return max(1, count)
 
         while True:
-            # Calculate how many items can fit on screen
-            available_height = self.display.height - 16  # Minus title (14+2)
-            cumulative_height = 0
-            max_visible = 0
-
-            for i in range(scroll_offset, len(items)):
-                if cumulative_height + item_heights[i] <= available_height:
-                    cumulative_height += item_heights[i]
-                    max_visible += 1
-                else:
-                    break
-
-            # Ensure at least 1 item is visible
-            if max_visible == 0:
-                max_visible = 1
+            if selected < scroll_offset:
+                scroll_offset = selected
+            while selected >= scroll_offset + count_visible(scroll_offset):
+                scroll_offset += 1
+            max_visible = count_visible(scroll_offset)
 
             # Calculate visible range
             visible_start = scroll_offset
@@ -352,7 +384,8 @@ class Menu:
                                        selected + 1, len(items),
                                        visible_start + 1,
                                        can_scroll_up, can_scroll_down,
-                                       show_index, show_counter)
+                                       show_index, show_counter,
+                                       icons[visible_start:visible_end] if icons else None, compact)
 
             # Wait for input
             key = self.input.wait_for_key()
@@ -378,7 +411,7 @@ class Menu:
 
     def _draw_scrollable_list(self, title, items, cursor_pos, current_num, total_num,
                               first_visible_num=1, can_scroll_up=False, can_scroll_down=False,
-                              show_index=True, show_counter=True):
+                              show_index=True, show_counter=True, icons=None, compact=False):
         """
         Draw scrollable list with fixed title at top
 
@@ -394,89 +427,6 @@ class Menu:
             show_index: Whether to show item numbers
             show_counter: Whether to show "1/10" counter in title
         """
-        # Clear entire screen first (PIL Image)
-        from PIL import Image
-        self.display.image = Image.new('1', (self.display.width, self.display.height), color=0)
-        from PIL import ImageDraw
-        self.display.draw = ImageDraw.Draw(self.display.image)
-
-        y = 0
-
-        # Draw title with optional counter and scroll indicators
-        if show_counter:
-            title_base = f"{title} {current_num}/{total_num}"
-        else:
-            title_base = title
-
-        # Add scroll indicators
-        scroll_indicator = ""
-        if can_scroll_up and can_scroll_down:
-            scroll_indicator = " ↕"
-        elif can_scroll_up:
-            scroll_indicator = " ↑"
-        elif can_scroll_down:
-            scroll_indicator = " ↓"
-
-        title_with_all = title_base + scroll_indicator
-        truncated_title = self.display._truncate(title_with_all, config.MAX_LINE_LENGTH)
-        self.display.draw.text((0, y), truncated_title,
-                              font=self.display.font_small, fill=1)
-        y += 14
-
-        # Separator line
-        self.display.draw.line((0, y, self.display.width - 1, y), fill=1)
-        y += 2
-
-        # Calculate text offset if showing numbers
-        text_offset = 15 if show_index else 2
-
-        # Draw visible items (check bounds)
-        for i, item in enumerate(items):
-            item_number = first_visible_num + i
-
-            # Wrap text to multiple lines (max 2 lines per item)
-            # Reduce max width if showing numbers
-            max_text_width = config.MAX_LINE_LENGTH - 2 if show_index else config.MAX_LINE_LENGTH
-            wrapped_lines = self.display._wrap_text(str(item), max_text_width, first_line_indent=show_index)[:2]
-
-            # Calculate item height (14px per line)
-            item_height = len(wrapped_lines) * 14
-
-            # Make sure we don't overflow screen
-            if y + item_height > self.display.height:
-                break
-
-            # Draw background highlight if selected
-            if i == cursor_pos:
-                self.display.draw.rectangle((0, y, self.display.width - 1, y + item_height - 1), fill=1)
-
-            # Draw item number
-            if show_index:
-                num_text = f"{item_number}."
-                if i == cursor_pos:
-                    self.display.draw.text((2, y + 1), num_text,
-                                          font=self.display.font_small, fill=0)
-                else:
-                    self.display.draw.text((2, y + 1), num_text,
-                                          font=self.display.font_small, fill=1)
-
-            # Draw each line
-            line_y = y
-            for line_idx, line in enumerate(wrapped_lines):
-                # First line uses text_offset, subsequent lines start from left edge
-                x_pos = text_offset if line_idx == 0 else 2
-
-                if i == cursor_pos:
-                    # White text on black background (inverted)
-                    self.display.draw.text((x_pos, line_y + 1), line,
-                                          font=self.display.font_small, fill=0)
-                else:
-                    # Black text on white background
-                    self.display.draw.text((x_pos, line_y + 1), line,
-                                          font=self.display.font_small, fill=1)
-                line_y += 14
-
-            y += item_height
-
-        self.display._update_display()
-
+        self.display.draw_list(title, items, cursor_pos, current_num, total_num,
+                               first_visible_num, can_scroll_up, can_scroll_down,
+                               show_index, show_counter, icons=icons, compact=compact)

@@ -5,6 +5,7 @@ Input Handler for GPIO buttons via evdev
 import evdev
 from evdev import InputDevice, categorize, ecodes
 import time
+import select
 import config
 
 
@@ -92,13 +93,15 @@ class InputHandler:
         self.last_key_time = current_time
         return True
 
-    def wait_for_key(self):
+    def wait_for_key(self, timeout=None):
         """
-        Wait for key press and return key code (blocking)
+        Wait for a key press, returning None when an optional timeout expires.
 
         Returns:
             Key code (from ecodes)
         """
+        if timeout is not None:
+            return self.get_key_nonblocking(timeout)
         for event in self.device.read_loop():
             if event.type == ecodes.EV_KEY:
                 key_event = categorize(event)
@@ -118,9 +121,6 @@ class InputHandler:
             Key code or None
         """
         try:
-            # Set device to non-blocking mode
-            import select
-
             # Wait for input with timeout
             r, w, x = select.select([self.device.fd], [], [], timeout)
 
@@ -139,12 +139,25 @@ class InputHandler:
     def flush_events(self):
         """Flush all pending events"""
         try:
-            while True:
-                event = self.get_key_nonblocking(timeout=0)
-                if event is None:
-                    break
+            while self.read_key_events(timeout=0):
+                pass
         except Exception:
             pass
+
+    def read_key_events(self, timeout=0.1):
+        """Read press/release batches without debouncing away a hold's release."""
+        ready, _, _ = select.select([self.device.fd], [], [], timeout)
+        if not ready:
+            return []
+        events = list(self.device.read())
+        if any(event.type == ecodes.EV_SYN and event.code == ecodes.SYN_DROPPED
+               for event in events):
+            raise RuntimeError('GPIO button event stream lost synchronization')
+        return [(event.code, event.value) for event in events if event.type == ecodes.EV_KEY]
+
+    def get_pressed_keys(self):
+        """Read the kernel's current state, independently of queued events."""
+        return set(self.device.active_keys())
 
     def release(self):
         """Release device (ungrab) so other apps can use it"""
@@ -193,8 +206,11 @@ class TestInputHandler:
         self.last_key_time = 0
         self.debounce_delay = 0.1
 
-    def wait_for_key(self):
+    def wait_for_key(self, timeout=None):
         """Simulate key press after delay"""
+        if timeout is not None:
+            time.sleep(timeout)
+            return None
         time.sleep(2)
         return KEY_ENTER
 
@@ -206,4 +222,13 @@ class TestInputHandler:
     def flush_events(self):
         """No-op for test mode"""
         pass
+
+    def read_key_events(self, timeout=0.1):
+        """Leave hold confirmations safely without simulating a reboot gesture."""
+        time.sleep(timeout)
+        return [(KEY_BACK, 1)]
+
+    def get_pressed_keys(self):
+        """Test mode never claims that a physical button is held."""
+        return set()
 

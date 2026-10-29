@@ -1,44 +1,36 @@
-"""
-Reboot Screen for OLED
-"""
+"""Reboot only after a fresh, continuous three-second center-button hold."""
 
-import sys
-import os
 import time
 
-# Add parent dir to path for language import
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from language import t
+from utils import run_command
+
+
+def _request_reboot(menu):
+    """Keep the existing systemd request safe from its own service shutdown."""
+    menu.display.draw_hold_confirmation(t('reboot_title'), t('wait'), '', 100)
+    code, _, error = run_command(['systemctl', '--no-block', 'reboot'], check=False)
+    if code:
+        print('Reboot request failed: {}'.format(error))
+        return menu.show_message(t('error'), t('reboot_failed'))
+    while True:
+        time.sleep(1)
 
 
 def reboot_system(menu):
-    """
-    Reboot confirmation and execution
-
-    Args:
-        menu: Menu instance
-
-    Returns:
-        -1 if HOME pressed, None otherwise
-    """
-    # First confirmation
-    result = menu.confirm(t("reboot_confirm"), "")
+    """Cancel safely on release, navigation or an unavailable button device."""
+    try:
+        result = menu.hold_to_confirm(t('reboot_title'), t('reboot_hold_center'),
+                                      t('reboot_hold_time'), seconds=3.0)
+    except (OSError, RuntimeError):
+        return menu.show_message(t('error'), t('reboot_input_failed'))
     if result == -1:
-        return -1  # Home
-    elif not result:
-        return None  # Cancelled
+        return -1
+    if result is not True:
+        return None
+    return _request_reboot(menu)
 
-    # Second confirmation for safety
-    result = menu.confirm(t("reboot_confirm"), t("yes") + "?")
-    if result == -1:
-        return -1  # Home
-    elif not result:
-        return None  # Cancelled
 
-    # Show rebooting message
-    menu.show_message(t("reboot_wait"), "", wait_for_key=False)
-    time.sleep(2)
-
-    # Execute reboot
-    os.system('reboot')
-
+def reboot_after_flash(menu):
+    """Use the same hold guard after flashing; returning never requests a reboot."""
+    return reboot_system(menu)
