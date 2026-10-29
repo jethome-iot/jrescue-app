@@ -7,9 +7,11 @@ import time
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import ssl
 from typing import Optional, List
 import config
+from image_cache import cache_lock, clear_images_unlocked, discard_image, image_identity
 from utils import (
     ensure_directory, print_error, print_success, print_info, print_warning,
     format_bytes, format_speed, format_time, show_menu, show_horizontal_menu
@@ -20,8 +22,30 @@ class DownloadHandler:
     """Handle HTTP downloads with progress tracking"""
 
     def __init__(self):
+        self.last_error = ""
         self.temp_dir = config.TEMP_DIR
+        self._completed = {}
         ensure_directory(self.temp_dir)
+
+    def clear_cache(self):
+        """Free stale RAM images before the console's free-space check."""
+        with cache_lock(self.temp_dir):
+            clear_images_unlocked(self.temp_dir)
+            self._completed.clear()
+
+    def discard_download(self, path):
+        """Discard this handler's completed image once, without deleting a replacement."""
+        expected = self._completed.get(path)
+        if expected is None:
+            return True
+        try:
+            discard_image(path, self.temp_dir, expected)
+            self._completed.pop(path, None)
+            return True
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.last_error = str(exc)
+            print_warning('Cannot release downloaded image: {}'.format(exc))
+            return False
 
     def _create_ssl_context(self):
         """Create SSL context for HTTPS requests"""
@@ -38,96 +62,109 @@ class DownloadHandler:
         Returns:
             List of image dicts or None if failed
         """
-        # Use current device from config
-        device_id = config.JETHOME_DEVICE
-        device_name = config.JETHOME_DEVICE_NAME
-
-        api_url = f"{config.JETHOME_API_BASE}/api/devices/{device_id}/info"
-
-        print_info(f"Fetching firmware list for {device_name}...")
-        print_info(f"API URL: {api_url} (device: {device_id})")
-
+        self.last_error = ""
         try:
+            # Under OLED, config is the frontend module inheriting core settings.
+            # Keep resolution inside the error boundary so a broken installation
+            # produces an API error rather than crashing the whole UI.
+            device_id = config.JETHOME_DEVICE
+            device_name = config.JETHOME_DEVICE_NAME
+            api_url = f"{config.JETHOME_API_BASE}/api/devices/{device_id}/info"
+            print_info(f"Fetching firmware list for {device_name}...")
             context = self._create_ssl_context()
             req = urllib.request.Request(api_url)
             req.add_header('User-Agent', 'RescueConsole/1.0')
-
-            with urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT, context=context) as response:
+            with urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT,
+                                        context=context) as response:
                 data = json.loads(response.read().decode('utf-8'))
 
-            if 'latest_firmware' not in data:
-                print_error("Invalid API response: missing 'latest_firmware'")
-                return None
+            firmware_types = data.get('latest_firmware')
+            if not isinstance(firmware_types, dict):
+                raise ValueError("Invalid API response: missing 'latest_firmware'")
+            api_platform = data.get('platform', '')
+            expected = config.JETHOME_PLATFORM
+            if expected and api_platform and api_platform != expected:
+                raise ValueError(f"API platform '{api_platform}' does not match '{expected}'")
 
             images = []
-            firmware_types = data['latest_firmware']
-
-            # The API response is already scoped to one board; confirm it matches
-            # the board we detected via the structured 'platform' field (e.g.
-            # "j100") instead of a hard-coded firmware-type whitelist.
-            api_platform = data.get('platform', '')
-            expected = getattr(config, 'JETHOME_PLATFORM', '')
-            if expected and api_platform and api_platform != expected:
-                print_warning(f"API platform '{api_platform}' does not match detected '{expected}'")
-
             for fw_type, fw_data in firmware_types.items():
-                # Keep only entries with a flashable sdcard image. This skips
-                # Windows-only tools (e.g. BurnTools) and entries with no image
-                # (e.g. armbianha) automatically — no need to name them.
+                # Only SDCard is a raw disk image. Burn containers and RAUC
+                # bundles are separate API entries and cannot go to this writer.
                 sdcard = fw_data.get('images', {}).get('sdcard')
                 if not sdcard or not sdcard.get('url'):
                     continue
-
-                image = {
-                    'name': f"{fw_type} v{fw_data['version']}",
-                    'filename': os.path.basename(sdcard['url']),
-                    'url': f"{config.JETHOME_API_BASE}{sdcard['url']}",
-                    'size': sdcard.get('filesize', 0),
-                    'size_mb': sdcard.get('filesize', 0) // (1024 * 1024),
-                    'version': fw_data['version'],
-                    'date': fw_data.get('date', 'unknown'),
+                url = urllib.parse.urljoin(config.JETHOME_API_BASE + '/', sdcard['url'])
+                filename = os.path.basename(urllib.parse.urlsplit(url).path)
+                if (not filename.lower().endswith(('.img', '.img.xz')) or
+                        '.burn.' in filename.lower()):
+                    continue
+                size = int(sdcard.get('filesize') or 0)
+                version = str(fw_data['version'])
+                date = fw_data.get('date') or 'unknown'
+                images.append({
+                    'name': f"{fw_type} v{version}",
+                    'filename': filename,
+                    'url': url,
+                    'size': size,
+                    'size_mb': size // (1024 * 1024),
+                    'version': version,
+                    'date': date,
                     'fw_type': fw_type,
-                    'description': f"Version {fw_data['version']} ({fw_data.get('date', 'unknown')[:10]})"
-                }
+                    'description': f"Version {version} ({date[:10]})",
+                })
 
-                images.append(image)
-
-            # Newest builds first (ISO-8601 dates sort lexicographically; unknowns last)
-            images.sort(
-                key=lambda im: im['date'] if im.get('date') and im['date'] != 'unknown' else '',
-                reverse=True
-            )
-
-            if images:
-                print_success(f"Found {len(images)} firmware images")
-                print_info(f"Fetched {len(images)} images from JetHome API")
-            else:
-                print_warning("No images found in API response")
-
+            images.sort(key=lambda im: im['date'] if im['date'] != 'unknown' else '',
+                        reverse=True)
+            print_success(f"Found {len(images)} firmware images")
             return images
-
-        except urllib.error.HTTPError as e:
-            print_error(f"HTTP Error {e.code}: {e.reason}")
-            print_error(f"JetHome API HTTP error: {e.code} - {e.reason}")
-            return None
-
-        except urllib.error.URLError as e:
-            print_error(f"Network error: {e.reason}")
-            print_error(f"JetHome API network error: {e.reason}")
-            return None
-
-        except json.JSONDecodeError as e:
-            print_error(f"Invalid JSON response: {e}")
-            print_error(f"JetHome API JSON error: {e}")
-            return None
-
-        except Exception as e:
-            print_error(f"Failed to fetch images: {e}")
-            print_error(f"JetHome API error: {e}")
+        except Exception as exc:
+            self.last_error = str(exc)
+            print_error(f"JetHome API: {self.last_error}")
             return None
 
     def download_file(self, filename_or_url: str, dest_dir: str = None, resume: bool = True,
-                      dest_filename: str = None, progress_cb=None) -> Optional[str]:
+                      dest_filename: str = None, progress_cb=None, cancel_event=None) -> Optional[str]:
+        """Start RAM downloads fresh, clearing old images before opening the URL.
+
+        Explicit destinations outside the RAM cache retain the generic HTTP
+        resume behaviour. All application frontends use the managed cache.
+        """
+        directory = dest_dir if dest_dir is not None else self.temp_dir
+        if os.path.realpath(directory) != os.path.realpath(self.temp_dir):
+            return self._download_file(filename_or_url, directory, resume,
+                                       dest_filename, progress_cb, cancel_event)
+        self.last_error = ''
+        try:
+            parsed = urllib.parse.urlsplit(filename_or_url)
+            name = dest_filename if dest_filename is not None else os.path.basename(parsed.path)
+            if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+                raise ValueError('Expected a full image URL')
+            if (not name or name in ('.', '..') or name != os.path.basename(name) or
+                    not name.lower().endswith(('.img', '.xz'))):
+                raise ValueError('Invalid image filename')
+            with cache_lock(directory):
+                clear_images_unlocked(directory)
+                self._completed.clear()
+                try:
+                    result = self._download_file(filename_or_url, directory, False,
+                                                  name, progress_cb, cancel_event)
+                    if result:
+                        self._completed[result] = image_identity(result)
+                    return result
+                finally:
+                    # Failed/interrupted downloads must not leave RAM occupied.
+                    partial = os.path.join(directory, name+'.partial')
+                    try:
+                        os.unlink(partial)
+                    except FileNotFoundError:
+                        pass
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            self.last_error = str(exc)
+            print_error('Download failed: {}'.format(exc))
+            return None
+
+    def _download_file(self, filename_or_url: str, dest_dir: str = None, resume: bool = True,
+                       dest_filename: str = None, progress_cb=None, cancel_event=None) -> Optional[str]:
         """
         Download a file from the server with progress tracking
 
@@ -142,6 +179,7 @@ class DownloadHandler:
         Returns:
             Path to downloaded file or None if failed
         """
+        self.last_error = ""
         if dest_dir is None:
             dest_dir = self.temp_dir
 
@@ -149,7 +187,8 @@ class DownloadHandler:
 
         # Images always come from the JetHome API as full URLs.
         if not (filename_or_url.startswith('http://') or filename_or_url.startswith('https://')):
-            print_error(f"Expected a full image URL, got: {filename_or_url}")
+            self.last_error = f"Expected a full image URL, got: {filename_or_url}"
+            print_error(self.last_error)
             return None
         url = filename_or_url
         if dest_filename is None:
@@ -185,7 +224,10 @@ class DownloadHandler:
         print_info(f"Downloading: {dest_filename}")
         print_info(f"URL: {url}")
 
+        response = None
         try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError('Download cancelled')
             # Create request with resume support
             req = urllib.request.Request(url)
             req.add_header('User-Agent', 'RescueConsole/1.0')
@@ -200,6 +242,18 @@ class DownloadHandler:
                 response = urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT, context=context)
             else:
                 response = urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT)
+
+            status = response.getcode()
+            if start_byte and status == 200:
+                # A server may ignore Range. Restart instead of appending a
+                # second full image to the existing prefix and accepting it.
+                start_byte = 0
+            if status == 206:
+                content_range = response.headers.get('Content-Range', '')
+                expected_prefix = f'bytes {start_byte}-'
+                if not content_range.startswith(expected_prefix):
+                    response.close()
+                    raise ValueError("Server returned an unexpected download range")
 
             # Get file size
             total_size = None
@@ -225,7 +279,11 @@ class DownloadHandler:
                 chunk_size = config.DOWNLOAD_CHUNK_SIZE
 
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError('Download cancelled')
                     chunk = response.read(chunk_size)
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError('Download cancelled')
                     if not chunk:
                         break
 
@@ -277,7 +335,8 @@ class DownloadHandler:
 
             # Verify download completed
             if total_size and os.path.getsize(temp_path) != total_size:
-                print_error(f"Download incomplete: {os.path.getsize(temp_path)} / {total_size} bytes")
+                self.last_error = f"Download incomplete: {os.path.getsize(temp_path)} / {total_size} bytes"
+                print_error(self.last_error)
                 return None
 
             # Move temp file to final destination
@@ -290,34 +349,41 @@ class DownloadHandler:
             return dest_path
 
         except urllib.error.HTTPError as e:
+            self.last_error = str(e)
             print_error(f"HTTP Error {e.code}: {e.reason}")
             print_error(f"Download failed: HTTP {e.code} - {e.reason}")
             return None
 
         except urllib.error.URLError as e:
+            self.last_error = str(e)
             print_error(f"Network error: {e.reason}")
             print_error(f"Download failed: {e.reason}")
             return None
 
         except KeyboardInterrupt:
+            self.last_error = "Download interrupted"
             print("\n")
             print_warning("Download interrupted")
-            print_info("Partial file saved, can be resumed later")
+            if os.path.abspath(dest_dir) != os.path.abspath(self.temp_dir):
+                print_info("Partial file saved, can be resumed later")
             return None
 
         except Exception as e:
+            self.last_error = str(e)
             print_error(f"Download failed: {e}")
             print_error(f"Download failed: {e}")
             return None
+        finally:
+            if response is not None:
+                response.close()
 
     def _get_remote_file_size(self, url: str) -> Optional[int]:
         """Get remote file size without downloading"""
         try:
             req = urllib.request.Request(url, method='HEAD')
-            response = urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT)
-
-            if 'Content-Length' in response.headers:
-                return int(response.headers['Content-Length'])
+            with urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT) as response:
+                if 'Content-Length' in response.headers:
+                    return int(response.headers['Content-Length'])
         except Exception:
             pass
 
@@ -386,7 +452,7 @@ def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
     return None
 
 
-def download_image_interactive() -> Optional[str]:
+def download_image_interactive(handler=None) -> Optional[str]:
     """
     Interactive (curses-only) image download.
 
@@ -395,7 +461,7 @@ def download_image_interactive() -> Optional[str]:
     """
     from utils import show_progress_screen, show_text_screen
 
-    handler = DownloadHandler()
+    handler = handler if handler is not None else DownloadHandler()
 
     # Select image
     image = select_image_interactive(handler)
