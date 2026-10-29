@@ -923,23 +923,27 @@ def show_confirm_screen(title: str, lines: List[str], yes_label: str = "YES",
         return False
 
 
-def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
+def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> Optional[str]:
     """menuconfig-style settings screen (single curses session).
 
     Each item is a dict:
-      {'type': 'bool'|'choice'|'string'|'int',
+      {'type': 'bool'|'choice'|'string'|'int'|'action',
        'label': str,
        'get': callable() -> value,
        'set': callable(value),
        'help': str,                       # optional
        'choices': [(value, label), ...]}  # for 'choice'
     Values are applied immediately via set(); nothing persists across reboot.
+    An action item needs only label/action, and returns its action identifier
+    so the caller can confirm and execute it after curses has closed.
     """
     curses.curs_set(0)
     _init_colors()
 
     def fmt(item) -> str:
         kind = item['type']
+        if kind == 'action':
+            return f"    {item['label']}  --->"
         if kind == 'bool':
             return f"[{'*' if item['get']() else ' '}] {item['label']}"
         if kind == 'choice':
@@ -1071,14 +1075,16 @@ def show_settings_screen_curses(stdscr, title: str, items: List[dict]) -> None:
                 inline_choice(item)
             elif item['type'] in ('string', 'int'):
                 inline_edit(item)
+            elif item['type'] == 'action':
+                return item['action']
         elif key in (27, ord('q'), ord('Q')):
             return
 
 
-def show_settings_screen(title: str, items: List[dict]) -> None:
+def show_settings_screen(title: str, items: List[dict]) -> Optional[str]:
     """Show a menuconfig-style settings screen (curses)."""
     try:
-        curses.wrapper(show_settings_screen_curses, title, items)
+        return curses.wrapper(show_settings_screen_curses, title, items)
     except Exception as e:
         print_error(f"Settings screen error: {e}")
 

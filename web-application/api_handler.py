@@ -25,6 +25,7 @@ import flash
 import usb
 import ap
 from utils import get_system_info, check_disk_space, get_device_size, format_bytes
+from image_cache import discard_image, image_identity, is_cached_image
 
 # Global state for long-running operations
 operation_state = {
@@ -58,6 +59,8 @@ flash_handler = None
 usb_handler = None
 ap_handler = None
 _init_lock = threading.Lock()
+_image_operation_lock = threading.Lock()
+_download_cancel_event = None
 
 def init_handlers() -> None:
     """Initialize all handler instances
@@ -302,6 +305,8 @@ class APIHandler:
             # Get JetHome API images
             try:
                 jethome_images = download_handler.fetch_jethome_images()
+                if jethome_images is None:
+                    return {'success': False, 'error': download_handler.last_error}
                 for img in jethome_images or []:
                     images.append({
                         'source': 'jethome',
@@ -323,65 +328,47 @@ class APIHandler:
             return {'success': False, 'error': str(e)}
 
     def post_flash_download(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """POST /api/flash/download - Start image download
-
-        Starts download in background thread and returns immediately.
-        Progress can be tracked via get_flash_progress().
-
-        Args:
-            data: Dictionary containing 'url', 'filename', and optional 'size'
-
-        Returns:
-            Dictionary with 'success' and 'message'
-        """
-        global operation_state
-
-        try:
+        """Start a fresh RAM download; publish only this worker's own state."""
+        global _download_cancel_event
+        with _image_operation_lock:
             if operation_state['download']['active']:
                 return {'success': False, 'error': 'Download already in progress'}
-
-            url = data.get('url')
-            filename = data.get('filename')
-            size = data.get('size', 0)  # Expected file size
-
+            if operation_state.get('flash', {}).get('active'):
+                return {'success': False, 'error': 'Flash operation already in progress'}
+            url, filename = data.get('url'), data.get('filename')
             if not url or not filename:
                 return {'success': False, 'error': 'URL and filename are required'}
+            cancel = threading.Event()
+            _download_cancel_event = cancel
+            state = {'active': True, 'progress': 0, 'total': data.get('size', 0),
+                     'speed': 0, 'eta': 0, 'error': None, 'filename': filename, 'path': None}
+            operation_state['download'] = state
+            operation_state['flash'] = {'active': False, 'progress': 0, 'error': None, 'status': 'idle'}
 
-            # Reset state
-            operation_state['download'] = {
-                'active': True,
-                'progress': 0,
-                'total': size,
-                'speed': 0,
-                'eta': 0,
-                'error': None,
-                'filename': filename,
-                'path': None
-            }
-
-            # Start download in background thread
             def download_thread():
                 try:
-                    path = download_handler.download_file(url, dest_filename=filename)
-                    operation_state['download']['path'] = path
-                    operation_state['download']['active'] = False
-                    operation_state['download']['progress'] = operation_state['download']['total']
-                except Exception as e:
-                    operation_state['download']['error'] = str(e)
-                    operation_state['download']['active'] = False
+                    path = download_handler.download_file(url, dest_filename=filename,
+                                                          cancel_event=cancel)
+                    if cancel.is_set():
+                        if path:
+                            download_handler.discard_download(path)
+                        raise RuntimeError('Canceled by user')
+                    if not path:
+                        raise RuntimeError(download_handler.last_error or 'Download failed')
+                    state['path'] = path
+                    state['progress'] = state['total']
+                except Exception as exc:
+                    state['error'] = str(exc)
+                finally:
+                    state['active'] = False
 
-            thread = threading.Thread(target=download_thread, daemon=True)
-            thread.start()
-
-            return {
-                'success': True,
-                'message': 'Download started',
-                'filename': filename
-            }
-
-        except Exception as e:
-            operation_state['download']['active'] = False
-            return {'success': False, 'error': str(e)}
+            try:
+                threading.Thread(target=download_thread, daemon=True).start()
+            except Exception as exc:
+                state['active'] = False
+                state['error'] = str(exc)
+                return {'success': False, 'error': str(exc)}
+            return {'success': True, 'message': 'Download started', 'filename': filename}
 
     def get_flash_progress(self) -> Dict[str, Any]:
         """GET /api/flash/progress - Get download/flash progress
@@ -412,107 +399,71 @@ class APIHandler:
             return {'success': False, 'error': str(e)}
 
     def post_flash_start(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """POST /api/flash/start - Start flashing image to eMMC
-
-        Starts flash operation in background thread. Progress can be tracked
-        via get_flash_progress().
-
-        Args:
-            data: Dictionary containing 'path' (image file path)
-
-        Returns:
-            Dictionary with 'success' and 'message'
-        """
-        global operation_state
-
-        try:
+        """Flash once, then release the cached source before reporting completion."""
+        with _image_operation_lock:
             if operation_state['flash']['active']:
                 return {'success': False, 'error': 'Flash operation already in progress'}
-
+            if operation_state['download']['active']:
+                return {'success': False, 'error': 'Download still in progress'}
             image_path = data.get('path')
             if not image_path:
                 return {'success': False, 'error': 'Image path is required'}
-
             if not os.path.exists(image_path):
                 return {'success': False, 'error': 'Image file not found'}
+            try:
+                cached = is_cached_image(image_path, config.TEMP_DIR)
+                expected = image_identity(image_path) if cached else None
+            except (OSError, ValueError) as exc:
+                return {'success': False, 'error': str(exc)}
+            state = {'active': True, 'progress': 0, 'error': None, 'status': 'flashing'}
+            operation_state['flash'] = state
+            if operation_state['download'].get('path') == image_path:
+                operation_state['download']['path'] = None
 
-            # Reset state
-            operation_state['flash'] = {
-                'active': True,
-                'progress': 0,
-                'error': None,
-                'status': 'flashing'
-            }
-
-            # Start flash in background thread
             def flash_thread():
                 try:
                     success = flash_handler.flash_image(image_path, verify=False, skip_confirmation=True)
                     if success:
-                        operation_state['flash']['status'] = 'complete'
-                        operation_state['flash']['progress'] = 100
+                        state['status'], state['progress'] = 'complete', 100
                     else:
-                        operation_state['flash']['error'] = 'Flash failed'
-                        operation_state['flash']['status'] = 'error'
-                except Exception as e:
-                    operation_state['flash']['error'] = str(e)
-                    operation_state['flash']['status'] = 'error'
+                        state['error'], state['status'] = 'Flash failed', 'error'
+                except Exception as exc:
+                    state['error'], state['status'] = str(exc), 'error'
                 finally:
-                    operation_state['flash']['active'] = False
+                    try:
+                        if cached:
+                            discard_image(image_path, config.TEMP_DIR, expected)
+                    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+                        print('Cannot release flash image: {}'.format(exc))
+                    state['active'] = False
 
-            thread = threading.Thread(target=flash_thread, daemon=True)
-            thread.start()
-
-            return {
-                'success': True,
-                'message': 'Flashing started'
-            }
-
-        except Exception as e:
-            operation_state['flash']['active'] = False
-            return {'success': False, 'error': str(e)}
+            try:
+                threading.Thread(target=flash_thread, daemon=True).start()
+            except Exception as exc:
+                state['active'] = False
+                state['error'], state['status'] = str(exc), 'error'
+                return {'success': False, 'error': str(exc)}
+            return {'success': True, 'message': 'Flashing started'}
 
     def delete_flash_cancel(self) -> Dict[str, Any]:
-        """DELETE /api/flash/cancel - Cancel download/flash operation
-
-        Returns:
-            Dictionary with 'success' and 'message'
-        """
-        global operation_state
-
-        try:
-            # Cancel download - remove partial file
-            if operation_state['download']['active']:
-                filename = operation_state['download'].get('filename')
-                if filename:
-                    temp_path = os.path.join(config.TEMP_DIR, filename + '.partial')
-                    if os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except:
-                            pass
-                operation_state['download'] = {
-                    'active': False,
-                    'progress': 0,
-                    'total': 0,
-                    'speed': 0,
-                    'eta': 0,
-                    'error': 'Canceled by user',
-                    'filename': None,
-                    'path': None
-                }
-
-            # Cancel flash (can't really stop dd, just mark as canceled)
-            if operation_state['flash']['active']:
-                operation_state['flash']['error'] = 'Canceled by user'
-                operation_state['flash']['active'] = False
-
-            return {
-                'success': True,
-                'message': 'Operation canceled'
-            }
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
+        """Signal an active downloader; release a completed image immediately."""
+        with _image_operation_lock:
+            if operation_state.get('flash', {}).get('active'):
+                return {'success': False, 'error': 'Flash operation is in progress'}
+            state = operation_state['download']
+            if state['active']:
+                if _download_cancel_event is not None:
+                    _download_cancel_event.set()
+                # The worker retains ownership until its response/file is closed.
+                return {'success': True, 'message': 'Download cancellation requested'}
+            path = state.get('path')
+            if path:
+                try:
+                    discard_image(path, config.TEMP_DIR)
+                except (OSError, RuntimeError, ValueError, TypeError) as exc:
+                    return {'success': False, 'error': str(exc)}
+                state['path'], state['filename'], state['progress'] = None, None, 0
+            return {'success': True, 'message': 'Operation canceled'}
 
     def get_flash_files(self) -> Dict[str, Any]:
         """GET /api/flash/files - Get list of downloaded image files
@@ -557,34 +508,21 @@ class APIHandler:
             return {'success': False, 'error': str(e)}
 
     def delete_flash_file(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """DELETE /api/flash/file - Delete a downloaded image file
-
-        Args:
-            data: Dictionary containing 'path' (file path to delete)
-
-        Returns:
-            Dictionary with 'success' and 'message'
-        """
-        try:
+        """Discard a downloaded image, never a USB file or an active source."""
+        with _image_operation_lock:
+            if (operation_state['download']['active'] or
+                    operation_state.get('flash', {}).get('active')):
+                return {'success': False, 'error': 'An image operation is in progress'}
             filepath = data.get('path')
             if not filepath:
                 return {'success': False, 'error': 'File path is required'}
-
-            # Security check - must be in TEMP_DIR
-            if not filepath.startswith(config.TEMP_DIR):
-                return {'success': False, 'error': 'Invalid file path'}
-
-            if not os.path.exists(filepath):
-                return {'success': False, 'error': 'File not found'}
-
-            os.remove(filepath)
-
-            return {
-                'success': True,
-                'message': f'File deleted: {os.path.basename(filepath)}'
-            }
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
+            try:
+                discard_image(filepath, config.TEMP_DIR)
+            except (OSError, RuntimeError, ValueError, TypeError) as exc:
+                return {'success': False, 'error': str(exc)}
+            if operation_state['download'].get('path') == filepath:
+                operation_state['download']['path'] = None
+            return {'success': True, 'message': 'Downloaded image discarded'}
 
     # ==================== USB OPERATIONS ====================
 

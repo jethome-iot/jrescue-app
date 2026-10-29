@@ -8,6 +8,7 @@ boards with predictable interface names (e.g. mainline ethernet "end0") and on
 boards without Wi-Fi at all.
 """
 
+import os
 import time
 from typing import List, Optional
 import config
@@ -70,6 +71,10 @@ class NetworkHandler:
         Returns:
             List of dicts with keys: interface, ip, ssid (for WiFi)
         """
+        raise NotImplementedError
+
+    def get_ethernet_status(self) -> List[dict]:
+        """Return wired devices, including links that have no IP address."""
         raise NotImplementedError
 
     def has_wifi(self) -> bool:
@@ -158,9 +163,11 @@ class NetworkManagerHandler(NetworkHandler):
             ['nmcli', '-t', '-f', 'DEVICE,TYPE', 'device', 'status'],
             check=False
         )
-        if ret != 0 or not out:
+        if ret != 0:
             return
 
+        self._wifi_devices = []
+        self._eth_devices = []
         for line in out.strip().split('\n'):
             if not line:
                 continue
@@ -333,6 +340,48 @@ class NetworkManagerHandler(NetworkHandler):
             })
 
         return interfaces
+
+    def get_ethernet_status(self) -> List[dict]:
+        """Inspect auto-detected Ethernet interfaces without changing networking."""
+        if not self.available:
+            return []
+        self._enumerate_devices()
+        devices = []
+        for device in self._eth_devices:
+            ret, out, _ = run_command(
+                ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.HWADDR,IP4.ADDRESS',
+                 'device', 'show', device], check=False)
+            if ret != 0:
+                continue
+            fields = {}
+            for line in out.splitlines():
+                parts = _nmcli_split(line)
+                if len(parts) >= 2:
+                    fields[parts[0]] = parts[1]
+            link = None
+            speed = None
+            try:
+                with open(os.path.join('/sys/class/net', device, 'carrier')) as source:
+                    link = source.read().strip() == '1'
+            except OSError:
+                pass
+            try:
+                with open(os.path.join('/sys/class/net', device, 'speed')) as source:
+                    value = int(source.read().strip())
+                    speed = value if value > 0 else None
+            except (OSError, ValueError):
+                pass
+            state = fields.get('GENERAL.STATE', '')
+            devices.append({
+                'interface': device,
+                'connected': state.split(' ', 1)[0] == '100',
+                'carrier': link,
+                'ip': next((value.split('/')[0] for key, value in fields.items()
+                            if key.startswith('IP4.ADDRESS') and value), None),
+                'mac': fields.get('GENERAL.HWADDR') or None,
+                'speed': speed,
+            })
+        return devices
 
 
 def get_network_handler() -> Optional[NetworkHandler]:

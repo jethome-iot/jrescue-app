@@ -492,6 +492,7 @@ function startProgressMonitoring() {
             clearInterval(progressInterval);
             progressInterval = null;
             showNotification('Success', 'Flash complete!', 'success');
+            await loadDownloadedFiles();
         }
 
         // Flash error
@@ -502,6 +503,7 @@ function startProgressMonitoring() {
             clearInterval(progressInterval);
             progressInterval = null;
             showNotification('Error', result.flash.error, 'error');
+            await loadDownloadedFiles();
         }
     }, 500);
 }
@@ -511,6 +513,7 @@ function startProgressMonitoring() {
  */
 async function flashImage(path) {
     if (!confirm('FINAL CONFIRMATION\n\nThis will ERASE ALL DATA on eMMC!\n\nAre you absolutely sure?')) {
+        await discardDownloadedImage(path);
         return;
     }
 
@@ -620,11 +623,23 @@ async function deleteFile(path, filename) {
     }
 }
 
+async function discardDownloadedImage(path) {
+    const result = await apiCall('/flash/file', 'DELETE', {path});
+    if (result.success) {
+        if (currentDownloadPath === path) currentDownloadPath = null;
+        document.getElementById('flash-status').classList.add('d-none');
+        await loadDownloadedFiles();
+    } else {
+        showNotification('Error', result.error || 'Failed to discard image', 'error');
+    }
+}
+
 /**
  * Flash downloaded file to eMMC
  */
 async function flashDownloadedFile(path, filename) {
     if (!confirm(`Flash ${filename} to eMMC?\n\nWARNING: This will ERASE ALL DATA on eMMC!\n\nAre you absolutely sure?`)) {
+        await discardDownloadedImage(path);
         return;
     }
 

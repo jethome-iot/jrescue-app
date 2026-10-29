@@ -21,7 +21,7 @@ import config
 import translations as app_locale
 from translations import t
 from utils import (
-    require_root, clear_screen, print_info, print_error,
+    require_root, print_info, print_error, run_command,
     show_menu, show_horizontal_menu, input_dialog,
     show_text_screen, show_wait_screen, show_progress_screen, show_confirm_screen,
     show_settings_screen,
@@ -29,7 +29,7 @@ from utils import (
     check_web_app_status, get_local_ip
 )
 from network import get_network_handler
-from download import download_image_interactive
+from download import DownloadHandler, download_image_interactive
 from usb import list_usb_devices_interactive, USBHandler
 import ap
 
@@ -51,8 +51,6 @@ def network_setup_menu():
         ])
         return
 
-    ap_handler = ap.get_ap_handler()
-
     def title_fn():
         # Live status in the menu title (refreshes every ~2s without a keypress),
         # so plugging/unplugging a cable or connecting Wi-Fi shows immediately.
@@ -63,16 +61,13 @@ def network_setup_menu():
                 line = f"{status['ssid']} {line}"
         else:
             line = "not connected"
-        if ap_handler.is_ap_active():
-            line = f'{t("ap_on")} · {line}'
         return f'{t("network_options")} · {line}'
 
     while True:
         options = [
             t("back_to_main"),
             t("connect_wifi"),
-            t("provision_ap"),
-            t("test_connection")
+            t("ethernet_status")
         ]
 
         choice = show_menu(title_fn(), options, title_fn=title_fn)
@@ -86,17 +81,7 @@ def network_setup_menu():
             wifi_setup(network_handler)
 
         elif choice == 3:
-            # Raise the setup-AP and show how to provision from a phone
-            provision_ap()
-
-        elif choice == 4:
-            # Test connectivity
-            _, out = show_wait_screen(
-                t("test_connection"), t("testing_conn"),
-                network_handler.test_connectivity
-            )
-            show_text_screen(t("test_connection"),
-                             _output_lines(out) or [t("no_output")])
+            ethernet_status(network_handler)
 
 
 def wifi_setup(network_handler):
@@ -175,65 +160,20 @@ def wifi_setup(network_handler):
                          + _output_lines(out, limit=10))
 
 
-def provision_ap():
-    """Raise the Wi-Fi setup-AP so a phone can configure the network via the web portal.
-
-    The radio is single, so raising the AP takes it away from any current Wi-Fi.
-    The web portal (served on the AP at http://10.42.0.1) does the actual
-    scan/select/connect and tears the AP down once the home Wi-Fi is joined.
-    """
-    ap_handler = ap.get_ap_handler()
-    already_up = ap_handler.is_ap_active()
-
-    def bring_up():
-        if not ap_handler.is_ap_active():
-            ap_handler.start_ap()
-        # jrescue-ap-up writes the creds file early but waits for the (USB) radio
-        # to enumerate — poll briefly so we can show the SSID/PSK.
-        for _ in range(20):
-            if ap_handler.read_creds().get('ssid'):
-                break
-            time.sleep(0.5)
-        return ap_handler.read_creds()
-
-    creds, out = show_wait_screen(t("provision_ap"), t("ap_starting"), bring_up)
-    if not isinstance(creds, dict):
-        creds = {}
-
-    if not ap_handler.is_ap_active():
-        show_text_screen(t("provision_ap"),
-                         [t("ap_start_failed")] + _output_lines(out, 8))
+def ethernet_status(network_handler):
+    """Report wired devices even when Wi-Fi is the active connection."""
+    devices, out = show_wait_screen(t('ethernet_status'), t('collecting_info'),
+                                    network_handler.get_ethernet_status)
+    if isinstance(devices, Exception) or not devices:
+        show_text_screen(t('ethernet_status'), [t('ethernet_missing')] + _output_lines(out))
         return
-
-    ssid = creds.get('ssid') or 'jethub'
-    psk = creds.get('psk') or 'jethub123'
-    url = creds.get('url') or config.AP_URL
-
-    body = [
-        t("ap_on_line"),
-        "",
-        t("ap_on_phone"),
-        "  " + t("ap_step_join", ssid=ssid),
-        "  " + t("ap_step_pass", psk=psk),
-        "  " + t("ap_step_open", url=url),
-        "",
-        t("ap_body1"),
-        t("ap_body2"),
-        t("ap_body3"),
-        t("ap_body4"),
-        t("ap_body5") + f" http://{config.MDNS_HOSTNAME}:8124",
-    ]
-
-    if already_up:
-        # The AP holds the single radio, so offer to hand it back — otherwise
-        # Wi-Fi setup from this console (or the OLED) has nothing to scan with.
-        if show_confirm_screen(t("provision_ap"), body,
-                               yes_label=t("ap_stop"), no_label=t("ok")):
-            show_wait_screen(t("provision_ap"), t("stopping_ap"),
-                             ap_handler.release_radio)
-            show_text_screen(t("provision_ap"), [t("ap_stopped")])
-    else:
-        show_text_screen(t("provision_ap"), body)
+    lines = []
+    for device in devices:
+        carrier = device['carrier']
+        link = t('ethernet_up') if carrier is True else t('ethernet_down') if carrier is False else '--'
+        lines.extend([device['interface'], t('ethernet_link') + ': ' + link,
+                      'IP: ' + (device['ip'] or '--'), ''])
+    show_text_screen(t('ethernet_status'), lines)
 
 
 def _reboot_prompt():
@@ -300,7 +240,14 @@ def flash_from_http():
             ] + _output_lines(out, limit=8))
             return False
 
-    # Check RAM space for the compressed image
+    handler = DownloadHandler()
+    try:
+        handler.clear_cache()
+    except (OSError, RuntimeError, ValueError) as exc:
+        show_text_screen(t("title_download"), [str(exc)])
+        return False
+
+    # Check space only after old images have been released.
     free_space = check_disk_space(config.TEMP_DIR)
     if free_space < config.MIN_FREE_SPACE:
         show_text_screen(t("title_download"), [
@@ -309,11 +256,15 @@ def flash_from_http():
         ])
         return False
 
-    downloaded_image = download_image_interactive()
+    downloaded_image = download_image_interactive(handler)
     if not downloaded_image:
         return False
 
-    return flash_to_device(downloaded_image)
+    try:
+        return flash_to_device(downloaded_image,
+                               cleanup=lambda: handler.discard_download(downloaded_image))
+    finally:
+        handler.discard_download(downloaded_image)
 
 
 def flash_from_usb():
@@ -370,89 +321,6 @@ def flash_from_usb():
     return flash_to_device(selected_image['path'], cleanup=unmount_if_needed)
 
 
-def manage_ram_images():
-    """Manage downloaded images in RAM - flash or delete"""
-    while True:
-        ram_dir = config.TEMP_DIR
-        if not os.path.exists(ram_dir):
-            show_text_screen(t("images_in_ram"),
-                             [t("ram_dir_missing", dir=ram_dir)])
-            return False
-
-        image_files = []
-        for filename in os.listdir(ram_dir):
-            if filename.endswith(('.img', '.img.xz', '.xz')):
-                filepath = os.path.join(ram_dir, filename)
-                if os.path.isfile(filepath):
-                    image_files.append({
-                        'filename': filename,
-                        'path': filepath,
-                        'size': os.path.getsize(filepath)
-                    })
-
-        if not image_files:
-            show_text_screen(t("images_in_ram"), [
-                t("no_images_ram_dir", dir=ram_dir),
-                t("download_first_hint"),
-            ])
-            return False
-
-        menu_options = [t("back_to_flash_menu")]
-        for img in image_files:
-            menu_options.append(f"{img['filename']} ({format_bytes(img['size'])})")
-
-        choice = show_menu(t("images_in_ram"), menu_options)
-
-        if choice == 0 or choice == 1:
-            return False
-
-        image_index = choice - 2
-        if not (0 <= image_index < len(image_files)):
-            continue
-
-        selected = image_files[image_index]
-
-        action_options = [
-            t("back_to_image_list"),
-            t("action_flash"),
-            t("action_delete")
-        ]
-
-        action_choice = show_menu(
-            f"{selected['filename']} ({format_bytes(selected['size'])})",
-            action_options
-        )
-
-        if action_choice == 0 or action_choice == 1:
-            continue  # Back to image list
-
-        elif action_choice == 2:
-            # Flash image
-            if flash_to_device(selected['path']):
-                return True
-
-        elif action_choice == 3:
-            # Delete image
-            confirmed = show_confirm_screen(
-                t("confirm_deletion"),
-                [
-                    selected['filename'],
-                    f"{t('size')}: {format_bytes(selected['size'])}",
-                    "",
-                    t("deleting_frees_ram"),
-                ],
-                yes_label=t("yes_delete"),
-                no_label=t("cancel"),
-            )
-            if confirmed:
-                try:
-                    os.remove(selected['path'])
-                except Exception as e:
-                    show_text_screen(t("confirm_deletion"),
-                                     [t("failed_delete", error=e)])
-                # Loop back to the (updated) image list
-
-
 def flash_image_menu():
     """Flash image to eMMC - with source selection"""
     while True:
@@ -460,7 +328,6 @@ def flash_image_menu():
             t("back_to_main"),
             t("source_http"),
             t("source_usb"),
-            t("source_ram")
         ]
 
         source_choice = show_menu(t("select_image_source"), options)
@@ -474,10 +341,6 @@ def flash_image_menu():
 
         elif source_choice == 3:
             if flash_from_usb():
-                return
-
-        elif source_choice == 4:
-            if manage_ram_images():
                 return
 
 
@@ -534,15 +397,27 @@ def settings_menu():
     items = [
         {
             'type': 'choice',
-            'label': 'Language',
-            'choices': [('ru', 'Русский'), ('en', 'English')],
+            'label': t('settings_language'),
+            'choices': [('en', 'English'), ('ru', 'Русский')],
             'get': app_locale.get_language,
             'set': app_locale.set_language,
             'help': "Interface language for the console application.\n"
                     "Applies immediately to all menus.",
         },
+        {
+            'type': 'action',
+            'label': t('reboot_now'),
+            'action': 'reboot',
+        },
     ]
-    show_settings_screen(t("settings"), items)
+    action = show_settings_screen(t("settings"), items)
+    if action == 'reboot' and show_confirm_screen(
+            t('reboot_now'), [t('reboot_confirm')],
+            yes_label=t('reboot_now'), no_label=t('cancel')):
+        result, out = show_wait_screen(t('reboot_now'), t('rebooting'),
+                                       run_command, ['reboot'], check=False)
+        if isinstance(result, Exception) or result[0] != 0:
+            show_text_screen(t('reboot_now'), _output_lines(out) or [str(result)])
 
 
 def main_menu():
@@ -616,10 +491,7 @@ def main():
         # Check root privileges
         require_root()
 
-        # Language selection (curses)
-        clear_screen()
-        lang_code = app_locale.select_language_interactive()
-        app_locale.set_language(lang_code)
+        app_locale.set_language('en')
 
         # Ensure directories exist
         ensure_directory(config.TEMP_DIR)
