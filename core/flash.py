@@ -5,15 +5,18 @@ Image flashing module for writing to eMMC
 import os
 import sys
 import subprocess
+import tempfile
 import time
 import lzma
 from typing import Optional
 import config
+from image_writer import validate_range, write_image_stream
+from image_cache import cached_image_reader
 from translations import t
 from utils import (
     print_error, print_success, print_info, print_warning,
-    format_bytes, format_time, check_device_exists, get_device_size,
-    run_command
+    format_bytes, check_device_exists, get_device_size,
+    run_command, check_command_exists
 )
 
 
@@ -23,30 +26,23 @@ class FlashHandler:
     def __init__(self, emmc_device: str = None):
         self.emmc_device = emmc_device or config.EMMC_DEVICE
 
-    def _protect_offset_bytes(self) -> int:
-        """Bytes at the start of the target that must NOT be written.
+    def _protected_range_bytes(self) -> tuple:
+        """Validate the recovery window; missing settings must never disable it."""
+        start = config.RECOVERY_PROTECT_START_MB
+        end = config.RECOVERY_PROTECT_END_MB
+        validate_range(start, end, config.DD_BLOCK_SIZE)
+        return start * 1024 * 1024, end * 1024 * 1024
 
-        See config.RECOVERY_PROTECT_MB — this covers the bootloader, its env and
-        both recovery slots, which are writable from inside recovery and would be
-        destroyed by a whole-disk dd from sector 0.
-        """
-        return max(0, int(getattr(config, 'RECOVERY_PROTECT_MB', 0))) * 1024 * 1024
-
-    def _dd_offset_args(self) -> list:
-        """dd operands that skip the protected region on both input and output.
-
-        Byte-exact (iflag=skip_bytes / oflag=seek_bytes), so it does not depend on
-        the offset being a multiple of the dd block size. iflag=fullblock makes the
-        skip exact when the input is a pipe (xz/pv). Empty when nothing is protected.
-        """
-        off = self._protect_offset_bytes()
-        if off <= 0:
-            return []
+    def _writer_command(self) -> list:
+        """Use the same protected writer for every external pv/xz pipeline."""
+        start, end = self._protected_range_bytes()
         return [
-            'iflag=fullblock,skip_bytes',
-            'oflag=seek_bytes',
-            f'skip={off}',
-            f'seek={off}',
+            sys.executable,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'image_writer.py'),
+            '--target', self.emmc_device,
+            '--protect-start', str(start),
+            '--protect-end', str(end),
+            '--block-size', str(config.DD_BLOCK_SIZE * 1024 * 1024),
         ]
 
     def verify_emmc_device(self) -> bool:
@@ -198,6 +194,16 @@ class FlashHandler:
 
     def flash_image(self, image_path: str, verify: bool = False, skip_confirmation: bool = False,
                     progress_cb=None) -> bool:
+        """Keep a cached source alive until the complete protected write finishes."""
+        try:
+            with cached_image_reader(image_path, config.TEMP_DIR):
+                return self._flash_image(image_path, verify, skip_confirmation, progress_cb)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print_error('Cannot use flash source: {}'.format(exc))
+            return False
+
+    def _flash_image(self, image_path: str, verify: bool = False, skip_confirmation: bool = False,
+                     progress_cb=None) -> bool:
         """
         Flash image to eMMC device
 
@@ -212,6 +218,15 @@ class FlashHandler:
         # Verify image file exists
         if not os.path.exists(image_path):
             print_error(f"Image file not found: {image_path}")
+            return False
+
+        try:
+            _, protect_end = self._protected_range_bytes()
+        except (AttributeError, TypeError, ValueError) as e:
+            print_error(f"Invalid recovery protection settings: {e}")
+            return False
+        if not image_path.endswith('.xz') and os.path.getsize(image_path) <= protect_end:
+            print_error("Image contains no data after the recovery window")
             return False
 
         # Verify eMMC device
@@ -299,487 +314,153 @@ class FlashHandler:
             print_error(f"Flash operation failed: {e}")
             return False
 
-    def _flash_pipeline_cb(self, image_path: str, compressed: bool, progress_cb) -> bool:
-        """Flash via pv|{xz|}dd reporting numeric progress to progress_cb.
-
-        Uses `pv -n` (one integer percent per stderr line, based on the input
-        file size — for .xz that is compressed-bytes progress, same as the
-        interactive pipeline shows).
-        """
-        size = os.path.getsize(image_path)
+    def _flash_pipeline(self, image_path: str, compressed: bool,
+                        progress_cb=None) -> bool:
+        """Stream pv/xz output through the shared recovery-preserving writer."""
+        processes = []
         name = os.path.basename(image_path)
-
-        pv_cmd = ['pv', '-n', '-i', '0.5', '-s', str(size), image_path]
-        dd_cmd = [
-            'dd',
-            f'of={self.emmc_device}',
-            f'bs={config.DD_BLOCK_SIZE}M',
-            'conv=fsync',
-            'status=none'
-        ] + self._dd_offset_args()
+        use_pv = check_command_exists('pv')
+        if progress_cb and not use_pv:
+            return self._flash_python(image_path, compressed, progress_cb)
 
         try:
-            pv_p = subprocess.Popen(pv_cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
-            if compressed:
-                xz_p = subprocess.Popen(['xz', '-dc'], stdin=pv_p.stdout,
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL)
-                pv_p.stdout.close()
-                dd_in = xz_p.stdout
-            else:
-                xz_p = None
-                dd_in = pv_p.stdout
-
-            dd_p = subprocess.Popen(dd_cmd, stdin=dd_in,
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL)
-            dd_in.close()
-
-            progress_cb(0, name, self.emmc_device)
-            for line in pv_p.stderr:
+            writer_cmd = self._writer_command()
+            size = os.path.getsize(image_path)
+            if progress_cb:
+                progress_cb(0, name, self.emmc_device)
+            with open(image_path, 'rb') as image, tempfile.TemporaryFile() as errors:
                 try:
-                    progress_cb(int(line.strip()), name, self.emmc_device)
-                except ValueError:
-                    pass  # non-numeric pv noise
+                    source = image
+                    pv_process = None
+                    if use_pv:
+                        pv_process = subprocess.Popen(
+                            ['pv', '-n', '-i', '0.5', '-s', str(size)],
+                            stdin=image, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        processes.append(('pv', pv_process))
+                        source = pv_process.stdout
+                    if compressed:
+                        xz_process = subprocess.Popen(
+                            ['xz', '-dc'], stdin=source, stdout=subprocess.PIPE,
+                            stderr=errors)
+                        processes.append(('xz', xz_process))
+                        if source is not image:
+                            source.close()
+                        source = xz_process.stdout
 
-            dd_rc = dd_p.wait()
-            xz_rc = xz_p.wait() if xz_p else 0
-            pv_p.wait()
+                    writer = subprocess.Popen(
+                        writer_cmd, stdin=source, stdout=subprocess.DEVNULL,
+                        stderr=errors)
+                    processes.append(('Image writer', writer))
+                    if source is not image:
+                        source.close()
 
-            if dd_rc != 0:
-                print_error(f"dd command failed with code {dd_rc}")
-                return False
-            if xz_rc != 0:
-                print_error(f"xz command failed with code {xz_rc}")
-                return False
-            progress_cb(100, name, self.emmc_device)
+                    if pv_process:
+                        for line in pv_process.stderr:
+                            try:
+                                percent = min(99, max(0, int(line.strip())))
+                            except ValueError:
+                                continue
+                            if progress_cb:
+                                progress_cb(percent, name, self.emmc_device)
+                            elif not getattr(config, 'SILENT_CONSOLE', False):
+                                print(f"\rFlashing: {percent}%", end='', flush=True)
+
+                    # Do not report success if a reader or decompressor failed,
+                    # even when the writer received EOF and finished cleanly.
+                    results = [(label, process.wait()) for label, process in reversed(processes)]
+                    failed = [(label, code) for label, code in results if code != 0]
+                    if failed:
+                        errors.seek(0)
+                        detail = errors.read().decode('utf-8', errors='replace').strip()
+                        for label, code in failed:
+                            print_error(f"{label} failed with code {code}")
+                        if detail:
+                            print_error(detail)
+                        return False
+                finally:
+                    # A callback error or failed spawn must not leave an orphan
+                    # writer running after the frontend reports failure.
+                    for _, process in reversed(processes):
+                        if process.poll() is None:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                        for pipe in (process.stdout, process.stderr):
+                            if pipe is not None:
+                                pipe.close()
+
+            if progress_cb:
+                progress_cb(100, name, self.emmc_device)
+            elif use_pv and not getattr(config, 'SILENT_CONSOLE', False):
+                print()
             return True
+        except Exception as e:
+            print_error(f"Flash failed: {e}")
+            return False
 
+    def _flash_python(self, image_path: str, compressed: bool,
+                      progress_cb=None) -> bool:
+        """Use bounded-memory Python IO when pv or xz is unavailable."""
+        name = os.path.basename(image_path)
+        try:
+            protect_start, protect_end = self._protected_range_bytes()
+            size = os.path.getsize(image_path)
+            last_update = time.monotonic()
+            if progress_cb:
+                progress_cb(0, name, self.emmc_device)
+
+            with open(image_path, 'rb') as image:
+                source = lzma.LZMAFile(image, 'rb') if compressed else image
+                try:
+                    def report(consumed, written):
+                        """Keep callbacks responsive without flooding the UI."""
+                        nonlocal last_update
+                        now = time.monotonic()
+                        if now - last_update < 0.5:
+                            return
+                        percent = min(99, image.tell() * 100 / size) if size else 0
+                        status = f"Written: {format_bytes(written)}"
+                        if progress_cb:
+                            progress_cb(percent, name, status)
+                        elif not getattr(config, 'SILENT_CONSOLE', False):
+                            print(f"\rFlashing: {percent:.0f}% | {status}",
+                                  end='', flush=True)
+                        last_update = now
+
+                    written = write_image_stream(
+                        source, self.emmc_device, protect_start, protect_end,
+                        config.DD_BLOCK_SIZE * 1024 * 1024, progress_cb=report)
+                finally:
+                    if source is not image:
+                        source.close()
+
+            if progress_cb:
+                progress_cb(100, name, self.emmc_device)
+            elif not getattr(config, 'SILENT_CONSOLE', False):
+                print()
+            print_success(f"Total written: {format_bytes(written)}")
+            return True
         except Exception as e:
             print_error(f"Flash failed: {e}")
             return False
 
     def _flash_compressed(self, image_path: str, progress_cb=None) -> bool:
-        """Flash compressed (.xz) image using decompression on the fly"""
-        if progress_cb:
-            return self._flash_pipeline_cb(image_path, compressed=True,
-                                           progress_cb=progress_cb)
-        print_info("Decompressing and flashing (this will take several minutes)...")
-        print_info("Using STREAMING decompression - image is NOT loaded into RAM")
-        print()
-
-        # Use xz command if available for better performance
-        from utils import check_command_exists
-
-        # Get compressed file size for progress calculation
-        compressed_size = os.path.getsize(image_path)
-
+        """Decompress on the fly, preserving only the recovery window."""
         if check_command_exists('xz'):
-            # Check if pv is available for better progress
-            use_pv = check_command_exists('pv')
+            return self._flash_pipeline(image_path, compressed=True,
+                                        progress_cb=progress_cb)
+        return self._flash_compressed_python(image_path, progress_cb=progress_cb)
 
-            if use_pv:
-                print_info("Using xz + pv for streaming decompression with progress")
-                print()
-
-                # Build command: pv -f image.xz | xz -dc | dd of=/dev/mmcblk0 bs=4M
-                # -f forces pv to output progress even when stderr is not a terminal
-                pv_cmd = ['pv', '-f', '-pterb', '-s', str(compressed_size), image_path]
-                xz_cmd = ['xz', '-dc']
-                dd_cmd = [
-                    'dd',
-                    f'of={self.emmc_device}',
-                    f'bs={config.DD_BLOCK_SIZE}M',
-                    'conv=fsync',
-                    'status=none'  # Silence dd, let pv show progress
-                ] + self._dd_offset_args()
-
-                try:
-                    # Start pv process (reads compressed file) with unbuffered output
-                    pv_env = os.environ.copy()
-                    pv_env['PYTHONUNBUFFERED'] = '1'
-
-                    # For OLED: redirect pv output to /dev/null
-                    pv_stderr = subprocess.DEVNULL if getattr(config, 'SILENT_CONSOLE', False) else subprocess.PIPE
-
-                    pv_process = subprocess.Popen(
-                        pv_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=pv_stderr,  # Keep stderr separate or redirect to null
-                        env=pv_env,
-                        bufsize=0
-                    )
-
-                    # Start xz process (decompresses)
-                    xz_process = subprocess.Popen(
-                        xz_cmd,
-                        stdin=pv_process.stdout,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL
-                    )
-                    pv_process.stdout.close()  # Allow pv to receive SIGPIPE
-
-                    # Start dd process (writes to device)
-                    dd_process = subprocess.Popen(
-                        dd_cmd,
-                        stdin=xz_process.stdout,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    xz_process.stdout.close()
-
-                    # Read pv progress from stderr in real-time (unless silent mode)
-                    if not getattr(config, 'SILENT_CONSOLE', False):
-                        import fcntl
-                        # Set stderr to non-blocking mode
-                        fd = pv_process.stderr.fileno()
-                        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-                        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-                        while True:
-                            try:
-                                # Read available data
-                                chunk = pv_process.stderr.read(4096)
-                                if chunk:
-                                    sys.stdout.write(chunk.decode('utf-8', errors='replace'))
-                                    sys.stdout.flush()
-                            except (IOError, OSError):
-                                # No data available yet
-                                pass
-
-                            # Check if process finished
-                            if dd_process.poll() is not None:
-                                # Read any remaining output
-                                try:
-                                    remaining = pv_process.stderr.read()
-                                    if remaining:
-                                        sys.stdout.write(remaining.decode('utf-8', errors='replace'))
-                                        sys.stdout.flush()
-                                except:
-                                    pass
-                                break
-
-                            time.sleep(0.1)
-                    else:
-                        # Silent mode: just wait for process to finish
-                        dd_process.wait()
-
-                    if not getattr(config, 'SILENT_CONSOLE', False):
-                        print()  # New line after progress
-
-                    # Wait for all processes to complete
-                    dd_returncode = dd_process.wait()
-                    xz_returncode = xz_process.wait()
-                    pv_returncode = pv_process.wait()
-
-                    if dd_returncode != 0:
-                        print_error(f"dd command failed with code {dd_returncode}")
-                        return False
-
-                    if xz_returncode != 0:
-                        print_error(f"xz command failed with code {xz_returncode}")
-                        return False
-
-                    return True
-
-                except Exception as e:
-                    print_error(f"Flash failed: {e}")
-                    return False
-
-            else:
-                # Use xz with dd status=progress
-                print_info("Using xz command for streaming decompression")
-                print()
-
-                # Build command: xz -dc image.xz | dd of=/dev/mmcblk0 bs=4M status=progress
-                xz_cmd = ['xz', '-dc', image_path]
-                dd_cmd = [
-                    'dd',
-                    f'of={self.emmc_device}',
-                    f'bs={config.DD_BLOCK_SIZE}M',
-                    'conv=fsync'
-                ] + self._dd_offset_args()
-
-                # Check if dd supports status=progress
-                returncode, _, _ = run_command(['dd', '--help'], check=False)
-                dd_help_result = run_command(['dd', '--help'], check=False)
-                if 'status=progress' in str(dd_help_result):
-                    dd_cmd.append('status=progress')
-
-                try:
-                    # Start xz process
-                    xz_process = subprocess.Popen(
-                        xz_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
-
-                    # Start dd process
-                    dd_process = subprocess.Popen(
-                        dd_cmd,
-                        stdin=xz_process.stdout,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True
-                    )
-
-                    # Allow xz_process to receive SIGPIPE if dd_process exits
-                    xz_process.stdout.close()
-
-                    # Read output
-                    for line in dd_process.stdout:
-                        print(line, end='', flush=True)
-
-                    # Wait for processes to complete
-                    dd_returncode = dd_process.wait()
-                    xz_returncode = xz_process.wait()
-
-                    if dd_returncode != 0:
-                        print_error(f"dd command failed with code {dd_returncode}")
-                        return False
-
-                    if xz_returncode != 0:
-                        print_error(f"xz command failed with code {xz_returncode}")
-                        return False
-
-                    return True
-
-                except Exception as e:
-                    print_error(f"Flash failed: {e}")
-                    return False
-
-        else:
-            # Fallback to Python lzma module
-            print_info("Using Python lzma module for decompression")
-            return self._flash_compressed_python(image_path)
-
-    def _flash_compressed_python(self, image_path: str) -> bool:
-        """Flash compressed image using Python's lzma module"""
-        print()
-        print_info("Progress indicator:")
-        print()
-
-        try:
-            # Get compressed size for progress estimation
-            compressed_size = os.path.getsize(image_path)
-
-            with lzma.open(image_path, 'rb') as src:
-                with open(self.emmc_device, 'wb') as dst:
-                    # Use larger buffer for better performance
-                    buffer_size = config.DD_BLOCK_SIZE * 1024 * 1024  # DD_BLOCK_SIZE in MB
-                    bytes_written = 0
-                    bytes_read_compressed = 0
-                    start_time = time.time()
-                    last_update = start_time
-
-                    # Get underlying file object for tracking compressed bytes
-                    compressed_fp = src._fp if hasattr(src, '_fp') else None
-
-                    # Preserve the protected recovery region (see _dd_offset_args):
-                    # discard the image's first RECOVERY_PROTECT_MB of decompressed
-                    # data and write the rest at that offset. dst is a block device,
-                    # so seeking past [0, offset) leaves that region untouched.
-                    protect_offset = self._protect_offset_bytes()
-                    if protect_offset > 0:
-                        remaining = protect_offset
-                        while remaining > 0:
-                            skip_chunk = src.read(min(buffer_size, remaining))
-                            if not skip_chunk:
-                                print_error("Image smaller than protected region — aborting")
-                                return False
-                            remaining -= len(skip_chunk)
-                        dst.seek(protect_offset)
-
-                    while True:
-                        chunk = src.read(buffer_size)
-                        if not chunk:
-                            break
-
-                        dst.write(chunk)
-                        bytes_written += len(chunk)
-
-                        # Track compressed bytes read (if possible)
-                        if compressed_fp and hasattr(compressed_fp, 'tell'):
-                            try:
-                                bytes_read_compressed = compressed_fp.tell()
-                            except:
-                                pass
-
-                        # Update progress every second
-                        current_time = time.time()
-                        if current_time - last_update >= 0.5:
-                            elapsed = current_time - start_time
-                            if elapsed > 0:
-                                speed = bytes_written / elapsed
-
-                                # Calculate progress percentage based on compressed bytes
-                                progress_parts = [f"Written: {format_bytes(bytes_written)}"]
-
-                                if bytes_read_compressed > 0 and compressed_size > 0:
-                                    percent = min(100, (bytes_read_compressed * 100) // compressed_size)
-                                    progress_parts.append(f"({percent}%)")
-
-                                    # Calculate ETA
-                                    if percent > 0 and percent < 100:
-                                        total_time_estimate = elapsed * 100 / percent
-                                        eta = int(total_time_estimate - elapsed)
-                                        progress_parts.append(f"ETA: {format_time(eta)}")
-
-                                progress_parts.append(f"Speed: {format_bytes(speed)}/s")
-
-                                # Draw simple progress bar
-                                bar_width = 30
-                                if bytes_read_compressed > 0 and compressed_size > 0:
-                                    filled = int(bar_width * bytes_read_compressed / compressed_size)
-                                    bar = "█" * filled + "░" * (bar_width - filled)
-                                    print(f"\r[{bar}] {' | '.join(progress_parts)}", end='', flush=True)
-                                else:
-                                    print(f"\r{' | '.join(progress_parts)}", end='', flush=True)
-
-                            last_update = current_time
-
-                    print()  # New line
-                    print()
-                    print_success(f"Total written: {format_bytes(bytes_written)}")
-
-            return True
-
-        except Exception as e:
-            print()
-            print_error(f"Flash failed: {e}")
-            return False
+    def _flash_compressed_python(self, image_path: str, progress_cb=None) -> bool:
+        """Use Python lzma with the same protected writer as the xz pipeline."""
+        return self._flash_python(image_path, compressed=True, progress_cb=progress_cb)
 
     def _flash_uncompressed(self, image_path: str, progress_cb=None) -> bool:
-        """Flash uncompressed image using dd"""
-        if progress_cb:
-            return self._flash_pipeline_cb(image_path, compressed=False,
-                                           progress_cb=progress_cb)
-        print_info("Flashing image (this will take several minutes)...")
-        print()
-
-        # Check if pv is available
-        from utils import check_command_exists
-        use_pv = check_command_exists('pv')
-
-        if use_pv:
-            # Use pv for progress display
-            image_size = os.path.getsize(image_path)
-            print_info("Using pv for progress display")
-            print()
-
-            # Build command: pv -f image.img | dd of=/dev/mmcblk0 bs=4M
-            # -f forces pv to output progress even when stderr is not a terminal
-            pv_cmd = ['pv', '-f', '-pterb', '-s', str(image_size), image_path]
-            dd_cmd = [
-                'dd',
-                f'of={self.emmc_device}',
-                f'bs={config.DD_BLOCK_SIZE}M',
-                'conv=fsync',
-                'status=none'  # Silence dd
-            ] + self._dd_offset_args()
-
-            try:
-                # Start pv process with unbuffered stderr
-                pv_env = os.environ.copy()
-                pv_env['PYTHONUNBUFFERED'] = '1'
-
-                # For OLED: redirect pv output to /dev/null
-                pv_stderr = subprocess.DEVNULL if getattr(config, 'SILENT_CONSOLE', False) else subprocess.PIPE
-
-                pv_process = subprocess.Popen(
-                    pv_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=pv_stderr,  # Keep stderr separate or redirect to null
-                    env=pv_env,
-                    bufsize=0  # Unbuffered
-                )
-
-                # Start dd process
-                dd_process = subprocess.Popen(
-                    dd_cmd,
-                    stdin=pv_process.stdout,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                pv_process.stdout.close()  # Allow pv to receive SIGPIPE
-
-                # Read pv progress from stderr in real-time (unless silent mode)
-                if not getattr(config, 'SILENT_CONSOLE', False):
-                    import fcntl
-                    # Set stderr to non-blocking mode
-                    fd = pv_process.stderr.fileno()
-                    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-                    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-                    while True:
-                        try:
-                            # Read available data
-                            chunk = pv_process.stderr.read(4096)
-                            if chunk:
-                                sys.stdout.write(chunk.decode('utf-8', errors='replace'))
-                                sys.stdout.flush()
-                        except (IOError, OSError):
-                            # No data available yet
-                            pass
-
-                        # Check if process finished
-                        if dd_process.poll() is not None:
-                            # Read any remaining output
-                            try:
-                                remaining = pv_process.stderr.read()
-                                if remaining:
-                                    sys.stdout.write(remaining.decode('utf-8', errors='replace'))
-                                    sys.stdout.flush()
-                            except:
-                                pass
-                            break
-
-                        time.sleep(0.1)
-
-                    print()  # New line after progress
-                else:
-                    # Silent mode: just wait for process to finish
-                    dd_process.wait()
-
-                # Wait for processes
-                dd_returncode = dd_process.wait()
-                pv_returncode = pv_process.wait()
-
-                if dd_returncode != 0:
-                    print_error(f"Flash failed: dd returned {dd_returncode}")
-                    return False
-
-                return True
-
-            except Exception as e:
-                print_error(f"Flash failed: {e}")
-                return False
-
-        else:
-            # Use dd with status=progress
-            # Build dd command
-            dd_cmd = [
-                'dd',
-                f'if={image_path}',
-                f'of={self.emmc_device}',
-                f'bs={config.DD_BLOCK_SIZE}M',
-                'conv=fsync'
-            ] + self._dd_offset_args()
-
-            # Check if dd supports status=progress
-            returncode, stdout, _ = run_command(['dd', '--help'], check=False)
-            if 'status=progress' in stdout:
-                dd_cmd.append('status=progress')
-
-            # Run dd command (output goes to terminal)
-            returncode, _, stderr = run_command(dd_cmd, check=False, capture=False)
-
-            if returncode != 0:
-                print_error(f"Flash failed: {stderr}")
-                return False
-
-            return True
+        """Write an uncompressed disk image around the recovery window."""
+        return self._flash_pipeline(image_path, compressed=False, progress_cb=progress_cb)
 
 
 def select_target_device() -> Optional[str]:

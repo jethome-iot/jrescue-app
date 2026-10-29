@@ -93,18 +93,14 @@ MDNS_HOSTNAME = "jethub.local"
 # eMMC device path (check with: lsblk)
 EMMC_DEVICE = "/dev/mmcblk1"
 
-# Protected region at the start of the eMMC, in MiB.
-# On JetHub eMMC-recovery boards the first RECOVERY_PROTECT_MB hold the
-# bootloader, its environment and both A/B recovery slots. During normal boot
-# u-boot hardware-write-protects this region, but INSIDE recovery it is WRITABLE,
-# so the flasher itself must be the guard: a whole-disk OS image dd'd from
-# sector 0 would otherwise destroy u-boot, its env and both recovery slots.
-# The main-OS image is built with a matching offset (Armbian OFFSET=336), so we
-# skip the image's first RECOVERY_PROTECT_MB and write the rest at the same
-# absolute offset, preserving the boot area, recovery slots and the on-eMMC
-# partition table. Assumes a full-disk source image. Set to 0 to flash a plain
-# full-disk image from sector 0 (non-recovery targets, e.g. a blank SD card).
-RECOVERY_PROTECT_MB = 336
+# Protected user-area window, in MiB; the end is exclusive. This matches the
+# U-Boot WP request and covers both recovery slots (132-234 and 234-336 MiB).
+# Cold-boot recovery does not arm hardware WP, so every writer must preserve
+# this range itself. All other image bytes, including MBR/GPT below 128 MiB,
+# are written at their original offsets. Requires a full-disk source image.
+# Set both bounds to 0 only for targets without recovery (e.g. a blank SD).
+RECOVERY_PROTECT_START_MB = 128
+RECOVERY_PROTECT_END_MB = 336
 
 # Temporary directory for downloads
 TEMP_DIR = "/tmp/rescue"
@@ -126,7 +122,7 @@ SILENT_CONSOLE = False
 
 # ==================== ADVANCED SETTINGS ====================
 
-# Block size for dd command (in MB)
+# Streaming image write buffer size (in MiB; legacy setting name)
 DD_BLOCK_SIZE = 4  # 4MB blocks
 
 # Chunk size for downloads (bytes)
