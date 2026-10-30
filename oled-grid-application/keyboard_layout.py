@@ -16,12 +16,12 @@ PASSWORD_BASELINE = 11
 CONTROL_HEIGHT = 8
 KEY_BASELINE = 11
 
-FOOTER = (NUMBERS, None, SPACE, None, SUBMIT)
+FOOTER = (NUMBERS, '.', SPACE, '_', SUBMIT)
 ALPHABET = (tuple('qwertyuiop'), tuple('asdfghjkl'),
             (SHIFT,)+tuple('zxcvbnm')+(BACKSPACE,), FOOTER)
 DIGITS = (tuple('1234567890'), tuple('@#$%&-+()/'),
           (SYMBOLS,)+tuple('*"\':;!?')+(BACKSPACE,), (LETTERS,)+FOOTER[1:])
-PUNCTUATION = (tuple('[]{}<>^|~`'), (None, None)+tuple('.,_=\\')+(None, None),
+PUNCTUATION = (tuple('[]{}<>^|~`'), (None, None, None, ',', None, '=', '\\', None, None),
                (NUMBERS,)+(None,)*7+(BACKSPACE,), (LETTERS,)+FOOTER[1:])
 
 
@@ -34,7 +34,7 @@ def key_rectangles(rows, width=128, height=64):
         bottom = top+letter_height-1 if row < 3 else height-1
         margin = 6 if row == 1 and len(keys) == 9 else 0
         if row == 3:
-            weights = (30, 20, 24, 20, 34)
+            weights = (25, 16, 46, 16, 25)
         elif row == 2:
             weights = (2,)+(1,)*7+(2,)
         else:

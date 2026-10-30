@@ -120,9 +120,11 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   between navigation and rendering. Shift affects one letter; double Shift within
   0.5 seconds locks caps. `123`, `#+=` and `ABC` switch directly between layouts.
   Space, backspace and OK remain visible, with no vertical keyboard scrolling.
-  The space key is 24px wide. Each special
-  character appears exactly once across the number/symbol pages, with no quick
-  duplicates among the controls. `None` slots are invisible and skipped by navigation;
+  The space key is 46px wide and centered, with `.` to its left and `_` to its
+  right. These two keys are shared by all layouts and removed from the other
+  symbol rows; `$`, `/` and `-` remain on the number page. The footer dot is
+  drawn as a clear 2×2-pixel mark. Each special character
+  has one location. `None` slots are invisible and skipped by navigation;
   never insert repeated characters to fill the screen.
   The password field uses 14px of height and 15px Liberation Sans Narrow text,
   with a small key icon instead of a permanent `Pass:` label.
@@ -130,10 +132,13 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   blinks every 0.5 seconds. Keyboard input uses a timed wait so blinking remains
   on the UI thread; any real button press makes the caret visible again.
   The three letter rows remain 14px each, with unchanged character glyph sizes.
-  The bottom control row is 8px high, with `123`/`ABC`, space and OK in their
-  previous positions; its captions are 11px. `#+=`/`123` toggles symbol pages at
-  the left of row three. All 32 punctuation characters occur once across those
-  two pages. Navigation uses the same rectangles as the renderer.
+  The bottom control row is 8px high: `123`/`ABC`, `.`, space, `_`, OK;
+  its captions are 11px. `#+=`/`123` toggles symbol pages at the left of row three.
+  All 32 punctuation characters remain available across the two pages and
+  shared controls. Ambiguous punctuation uses pixel-drawn contours; lowercase
+  `l` has a top-left hook on its key and in the password, with its extra advance
+  included in cursor and scroll measurements. No symbol names or cursor hints
+  appear in the footer. Navigation uses the same rectangles as the renderer.
   UP from the top keyboard row focuses the password; LEFT/RIGHT moves its
   insertion cursor and DOWN returns to the same selected key. ENTER while the
   field is focused returns to the keys; only the explicit OK key submits.
@@ -157,7 +162,9 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   `06-wifi-networks.png` shows compact short and wrapped SSIDs in ENG/RUS.
   The user approved trying the four-row password-cursor preview; it is now
   implemented. The user rejected an eye button and a separate password overview:
-  do not add them. Further symbol/footer variants still require preview selection.
+  do not add them. The centered 46px space, `.`/`_` shortcuts, clear symbols and
+  top hook on `l` were approved and are implemented. Further visual variants
+  still require preview selection.
   The user approved **02 Liberation Sans**; its plain titles and keyboard glyphs
   are implemented. Keep only the current design in the preview folder.
   Font binaries and their individual licenses live in `oled-grid-application/fonts/`

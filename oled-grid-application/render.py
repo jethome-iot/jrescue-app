@@ -5,7 +5,7 @@ import math
 
 from PIL import Image, ImageDraw, ImageFont
 from keyboard_layout import (SHIFT, BACKSPACE, SPACE, SUBMIT, NUMBERS, LETTERS,
-                             SYMBOLS, PASSWORD_HEIGHT, PASSWORD_FONT_SIZE,
+                             SYMBOLS, PASSWORD_HEIGHT, PASSWORD_FONT_SIZE, CONTROL_HEIGHT,
                              PASSWORD_BASELINE, KEY_BASELINE, KeyboardState, key_rectangles)
 
 
@@ -79,7 +79,12 @@ class OledRenderer:
 
     def text_width(self, value, font=None):
         """Measure pixel widths, including Cyrillic and punctuation."""
-        return self._measure_draw.textlength(str(value), font=font or self.font_menu)
+        value = str(value)
+        width = self._measure_draw.textlength(value, font=font or self.font_menu)
+        if font is self.font(PASSWORD_FONT_SIZE, family='keyboard'):
+            # The custom l hook needs one extra pixel before the next glyph.
+            width += value.count('l')
+        return width
 
     def clip(self, value, width, font=None):
         """Keep the ellipsis within the available pixel width."""
@@ -404,9 +409,72 @@ class OledRenderer:
             self.button(draw, box, value, selected == index)
         return image
 
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def lower_l():
+        """Distinguish lowercase l with a short hook at its top left."""
+        image = Image.new('1', (3, 11))
+        ImageDraw.Draw(image).line(((0, 1), (2, 0), (2, 10)), fill=1)
+        return image
+
+    @staticmethod
+    def _punctuation_glyph(key, width, height):
+        """Keep easily confused punctuation legible on the small panel."""
+        image = Image.new('1', (width, height))
+        draw = ImageDraw.Draw(image)
+        cx, cy = (width-1)//2, (height-1)//2
+        if key in '[]':
+            sign = 1 if key == '[' else -1
+            draw.line((cx+sign*2, cy-5, cx-sign*2, cy-5,
+                       cx-sign*2, cy+5, cx+sign*2, cy+5), fill=1)
+        elif key in '{}':
+            sign = 1 if key == '{' else -1
+            points = [(2, -5), (0, -5), (-1, -4), (-1, -2), (-3, 0),
+                      (-1, 2), (-1, 4), (0, 5), (2, 5)]
+            draw.line([(cx+sign*x, cy+y) for x, y in points], fill=1)
+        elif key in '<>':
+            sign = 1 if key == '<' else -1
+            draw.line((cx+sign*3, cy-4, cx-sign*3, cy, cx+sign*3, cy+4), fill=1)
+        elif key == '^':
+            draw.line((cx-3, cy, cx, cy-4, cx+3, cy), fill=1)
+        elif key == '|':
+            draw.line((cx, cy-5, cx, cy+5), fill=1)
+        elif key == '~':
+            draw.line([(cx+x, cy+y) for x, y in
+                       ((-4, 0), (-3, -1), (-2, -2), (-1, -2), (1, 0), (2, 0), (3, -1), (4, -2))], fill=1)
+        elif key == '`':
+            draw.line((cx-2, cy-4, cx, cy-2), fill=1)
+        elif key == '.':
+            draw.rectangle((cx, cy+4, cx+1, cy+5), fill=1)
+        elif key == ',':
+            draw.rectangle((cx, cy+3, cx+1, cy+4), fill=1)
+            draw.line((cx+1, cy+4, cx, cy+6), fill=1)
+        elif key == '_':
+            draw.line((cx-4, cy+5, cx+4, cy+5), fill=1)
+        elif key == '=':
+            draw.line((cx-3, cy-1, cx+3, cy-1), fill=1)
+            draw.line((cx-3, cy+2, cx+3, cy+2), fill=1)
+        elif key in '\\/':
+            sign = 1 if key == '\\' else -1
+            draw.line((cx-sign*3, cy-5, cx+sign*3, cy+5), fill=1)
+        return image, -(width//2), -KEY_BASELINE
+
     @lru_cache(maxsize=256)
     def keyboard_glyph(self, key, width, height):
-        """Fit actual ink to its key while keeping punctuation on one baseline."""
+        """Fit glyphs to their keys, preserving the three main rows' sizes."""
+        if height == CONTROL_HEIGHT and key in ('.', '_'):
+            image = Image.new('1', (width, height))
+            draw = ImageDraw.Draw(image)
+            cx = (width-1)//2
+            if key == '.':
+                draw.rectangle((cx, 5, cx+1, 6), fill=1)
+            else:
+                draw.line((cx-4, 6, cx+4, 6), fill=1)
+            return image, -(width//2), -KEY_BASELINE
+        if key == 'l':
+            return self.lower_l(), -1, -KEY_BASELINE
+        if key in '[]{}<>^|~`.,_=\\/':
+            return self._punctuation_glyph(key, width, height)
         for size in range(15, 8, -1):
             face = self.font(size, family='keyboard')
             mask = Image.new('1', (32, 40))
@@ -421,6 +489,25 @@ class OledRenderer:
                     bounds[0]-16 >= -(width//2) and bounds[2]-16 <= (width+1)//2):
                 return mask.crop(bounds), bounds[0]-16, bounds[1]-20
         return mask.crop(bounds), bounds[0]-16, bounds[1]-20
+
+    def password_text(self, text, face):
+        """Draw the same hooked l in the field and clip ink to its strip."""
+        field = Image.new('1', (self.width, PASSWORD_HEIGHT))
+        draw = ImageDraw.Draw(field)
+        draw.fontmode = '1'
+        run_start = 0
+        for index, char in enumerate(text):
+            if char != 'l':
+                continue
+            x = 15+round(self.text_width(text[:run_start], face))
+            draw.text((x, PASSWORD_BASELINE), text[run_start:index], font=face,
+                      fill=1, anchor='ls')
+            x = 16+round(self.text_width(text[:index], face))
+            draw.bitmap((x, PASSWORD_BASELINE-11), self.lower_l(), fill=1)
+            run_start = index+1
+        x = 15+round(self.text_width(text[:run_start], face))
+        draw.text((x, PASSWORD_BASELINE), text[run_start:], font=face, fill=1, anchor='ls')
+        return field
 
     def password_window(self, state):
         """Keep the cursor visible without altering the full input value."""
@@ -444,18 +531,17 @@ class OledRenderer:
 
     def keyboard(self, password, grid, cursor_row, cursor_col, hint='', shift=0,
                  state=None, cursor_visible=True):
-        """Show the previous four rows and a directly focusable password strip."""
+        """Show QWERTY, shared password shortcuts and the focusable input strip."""
         image, draw = self.canvas()
         state = KeyboardState(password) if state is None else state
         text, face, start, end = self.password_window(state)
+        image.paste(self.password_text(text, face), (0, 0))
         if start:
             draw.line((6, 3, 2, 7, 6, 11), fill=1)
         else:
             draw.ellipse((1, 3, 7, 9), outline=1)
             draw.line((7, 6, 12, 6), fill=1)
             draw.line((10, 6, 10, 9), fill=1)
-        if text:
-            draw.text((15, PASSWORD_BASELINE), text, font=face, fill=1, anchor='ls')
         caret = min(self.width-5, 15+round(self.text_width(state.value[start:state.cursor], face)))
         if cursor_visible:
             draw.line((caret, 1, caret, 12), fill=1, width=2 if state.field_focused else 1)
@@ -485,7 +571,7 @@ class OledRenderer:
                     draw.line((cx-1, cy-2, cx+3, cy+2), fill=ink)
                     draw.line((cx+3, cy-2, cx-1, cy+2), fill=ink)
                 elif key == SPACE:
-                    draw.line((cx-5, cy-1, cx-5, cy+1, cx+5, cy+1, cx+5, cy-1), fill=ink)
+                    draw.line((x0+6, cy-1, x0+6, cy+1, x1-6, cy+1, x1-6, cy-1), fill=ink)
                 elif key in (NUMBERS, LETTERS, SYMBOLS, SUBMIT):
                     text = {NUMBERS: '123', LETTERS: 'ABC', SYMBOLS: '#+=', SUBMIT: 'OK'}.get(key, key)
                     self.label(draw, box, text, 11, minimum=11, fill=ink)

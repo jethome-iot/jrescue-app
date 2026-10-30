@@ -216,7 +216,7 @@ Other inner menus and two-line messages use a 20px line pitch instead of 25px.
  q w e r t y u i o p
   a s d f g h j k l
  ⇧ z x c v b n m ⌫
- 123      ␣      OK
+ 123  .    ␣    _  OK
 ```
 
 Selecting a secured network opens the editor directly, without an extra
@@ -228,10 +228,14 @@ vertical scrolling. UP/DOWN/LEFT/RIGHT moves between keys and ENTER selects.
 Shift capitalizes the next letter; double Shift within 0.5 seconds locks caps.
 `123` opens numbers, `#+=` opens more symbols, and `ABC` returns to letters.
 The bracket key inserts a space, backspace deletes, and OK submits. BACK/HOME cancels.
-Space occupies 24 pixels. Special characters appear exactly once
-across the number and symbol pages. Unused positions stay blank and navigation
-skips them. `123`/`ABC`, space and OK occupy the bottom row; backspace remains at
-the right of the third row. The symbol-page toggle is at the lower left.
+Space occupies 46 pixels at the center of the bottom row, with `.` to its left
+and `_` to its right. These shortcuts are shared by all layouts and do not
+repeat in the other symbol rows; `$`, `/` and `-` remain on the number page.
+All 32 special characters remain available. Unused positions stay blank and
+navigation skips them. `123`/`ABC` and OK occupy the bottom corners; backspace
+remains at the right of the third row. The symbol-page toggle is at the lower left.
+Ambiguous punctuation has distinct pixel contours. Lowercase `l` has a top hook
+on its key and in the password; cursor and scroll widths account for it.
 The password strip is 14px high and uses a small key icon instead of `Pass:`.
 When empty, it shows only the key and a blinking caret, without placeholder text.
 Its 15px Narrow text preserves space for the input without reducing keyboard glyphs.
