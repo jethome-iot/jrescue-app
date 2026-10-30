@@ -1,8 +1,5 @@
 """Phone-style password keyboard state and shared pixel geometry."""
 
-import time
-
-
 SHIFT = '<shift>'
 BACKSPACE = '<backspace>'
 SPACE = '<space>'
@@ -13,6 +10,7 @@ SYMBOLS = '<symbols>'
 PASSWORD_HEIGHT = 14
 PASSWORD_FONT_SIZE = 15
 PASSWORD_BASELINE = 11
+PASSWORD_TEXT_X = 20
 CONTROL_HEIGHT = 8
 KEY_BASELINE = 11
 
@@ -21,7 +19,7 @@ ALPHABET = (tuple('qwertyuiop'), tuple('asdfghjkl'),
             (SHIFT,)+tuple('zxcvbnm')+(BACKSPACE,), FOOTER)
 DIGITS = (tuple('1234567890'), tuple('@#$%&-+()/'),
           (SYMBOLS,)+tuple('*"\':;!?')+(BACKSPACE,), (LETTERS,)+FOOTER[1:])
-PUNCTUATION = (tuple('[]{}<>^|~`'), (None, None, None, ',', None, '=', '\\', None, None),
+PUNCTUATION = (tuple('[]{}<>^|~`'), tuple(',=\\')+(None,)*6,
                (NUMBERS,)+(None,)*7+(BACKSPACE,), (LETTERS,)+FOOTER[1:])
 
 
@@ -61,7 +59,6 @@ class KeyboardState:
         self.mode = 'letters'
         self.shift = 0  # 0: lower case, 1: next letter, 2: caps lock
         self.row = self.col = 0
-        self._last_shift = None
 
     @property
     def rows(self):
@@ -108,7 +105,7 @@ class KeyboardState:
                            key=lambda col: abs(sum(rectangles[target][col][1][::2])-center))
             self.row = target
 
-    def activate(self, now=None):
+    def activate(self):
         """Apply a key; only an explicit OK submits the full, untrimmed value."""
         if self.field_focused:
             self.field_focused = False
@@ -117,15 +114,8 @@ class KeyboardState:
         if key is None:
             return False
         if key == SHIFT:
-            now = time.monotonic() if now is None else now
-            if self.shift == 0:
-                self.shift, self._last_shift = 1, now
-            elif self.shift == 1 and self._last_shift is not None and now-self._last_shift <= .5:
-                self.shift, self._last_shift = 2, None
-            else:
-                self.shift, self._last_shift = 0, None
+            self.shift = (self.shift+1) % 3
             return False
-        self._last_shift = None
         if key in (NUMBERS, LETTERS, SYMBOLS):
             self.mode = {NUMBERS: 'numbers', LETTERS: 'letters', SYMBOLS: 'symbols'}[key]
             if self.shift == 1:

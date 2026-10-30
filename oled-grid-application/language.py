@@ -59,7 +59,7 @@ TRANSLATIONS = {
 
         # Flash menu
         "flash_title": "Запись",
-        "flash_api": "Из API",
+        "flash_api": "Образы jethome",
         "flash_usb": "С USB",
         "flash_list": "Список",
         "flash_back": "Назад",
@@ -176,7 +176,7 @@ TRANSLATIONS = {
 
         # Flash menu
         "flash_title": "Flash",
-        "flash_api": "From API",
+        "flash_api": "JetHome images",
         "flash_usb": "From USB",
         "flash_list": "List",
         "flash_back": "Back",

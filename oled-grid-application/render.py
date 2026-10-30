@@ -7,7 +7,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from keyboard_layout import (SHIFT, BACKSPACE, SPACE, SUBMIT, NUMBERS, LETTERS,
                              SYMBOLS, PASSWORD_HEIGHT, PASSWORD_FONT_SIZE, CONTROL_HEIGHT,
-                             PASSWORD_BASELINE, KEY_BASELINE, KeyboardState, key_rectangles)
+                             PASSWORD_BASELINE, PASSWORD_TEXT_X, KEY_BASELINE,
+                             KeyboardState, key_rectangles)
 
 
 class OledRenderer:
@@ -118,11 +119,9 @@ class OledRenderer:
     def text_width(self, value, font=None):
         """Measure pixel widths, including Cyrillic and punctuation."""
         value = str(value)
-        width = self._measure_draw.textlength(value, font=font or self.font_menu)
         if font is self.font(PASSWORD_FONT_SIZE, family='keyboard'):
-            # The custom l hook needs one extra pixel before the next glyph.
-            width += value.count('l')
-        return width
+            return sum(self.password_character(char)[2] for char in value)
+        return self._measure_draw.textlength(value, font=font or self.font_menu)
 
     def clip(self, value, width, font=None):
         """Keep the ellipsis within the available pixel width."""
@@ -528,37 +527,56 @@ class OledRenderer:
                 return mask.crop(bounds), bounds[0]-16, bounds[1]-20
         return mask.crop(bounds), bounds[0]-16, bounds[1]-20
 
-    def password_text(self, text, face):
-        """Draw the same hooked l in the field and clip ink to its strip."""
+    @lru_cache(maxsize=256)
+    def password_character(self, character):
+        """Reuse the character's actual key bitmap, including its fitted size."""
+        face = self.font(PASSWORD_FONT_SIZE, family='keyboard')
+        advance = self._measure_draw.textlength(character, font=face)
+        if character == ' ':
+            return Image.new('1', (1, 1)), 0, advance
+        state = KeyboardState()
+        for mode, shift in (('letters', 0), ('letters', 2), ('numbers', 0), ('symbols', 0)):
+            state.mode, state.shift = mode, shift
+            for row, keys in enumerate(self.keyboard_rectangles(state.rows)):
+                for key, (x0, y0, x1, y1) in keys:
+                    if key != character:
+                        continue
+                    mask, _, dy = self.keyboard_glyph(key, x1-x0+1, y1-y0+1)
+                    bounds = mask.getbbox()
+                    glyph = mask.crop(bounds)
+                    # Footer symbols sit on the shorter control-row baseline.
+                    baseline = KEY_BASELINE-CONTROL_HEIGHT+1 if row == 3 else 0
+                    return glyph, dy+bounds[1]+baseline, max(advance, glyph.width+1)
+        # Preserve display of prefilled text outside the on-screen alphabet.
+        glyph = self._glyphs(character, face)
+        bounds = face.getmask(character, mode='1').getbbox()
+        dy = face.getbbox(character, anchor='ls')[1]+(bounds[1] if bounds else 0)
+        return glyph, dy, max(advance, glyph.width+1)
+
+    def password_text(self, text):
+        """Draw precisely the same glyphs as the keys without scaling them."""
         field = Image.new('1', (self.width, PASSWORD_HEIGHT))
         draw = ImageDraw.Draw(field)
-        draw.fontmode = '1'
-        run_start = 0
-        for index, char in enumerate(text):
-            if char != 'l':
-                continue
-            x = 15+round(self.text_width(text[:run_start], face))
-            draw.text((x, PASSWORD_BASELINE), text[run_start:index], font=face,
-                      fill=1, anchor='ls')
-            x = 16+round(self.text_width(text[:index], face))
-            draw.bitmap((x, PASSWORD_BASELINE-11), self.lower_l(), fill=1)
-            run_start = index+1
-        x = 15+round(self.text_width(text[:run_start], face))
-        draw.text((x, PASSWORD_BASELINE), text[run_start:], font=face, fill=1, anchor='ls')
+        offset = 0
+        for char in text:
+            glyph, dy, advance = self.password_character(char)
+            draw.bitmap((PASSWORD_TEXT_X+round(offset), PASSWORD_BASELINE+dy), glyph, fill=1)
+            offset += advance
         return field
 
     def password_window(self, state):
         """Keep the cursor visible without altering the full input value."""
         face = self.font(PASSWORD_FONT_SIZE, family='keyboard')
         start = min(state.window_start, state.cursor) if state.field_focused else 0
+        available = self.width-PASSWORD_TEXT_X-5
 
         def width(value):
-            return max(self.text_width(value, face), self._glyphs(value, face).width)
+            return self.text_width(value, face)
 
-        while start < state.cursor and width(state.value[start:state.cursor]) > self.width-20:
+        while start < state.cursor and width(state.value[start:state.cursor]) > available:
             start += 1
         end = state.cursor
-        while end < len(state.value) and width(state.value[start:end+1]) <= self.width-20:
+        while end < len(state.value) and width(state.value[start:end+1]) <= available:
             end += 1
         state.window_start = start
         return state.value[start:end], face, start, end
@@ -573,14 +591,16 @@ class OledRenderer:
         image, draw = self.canvas()
         state = KeyboardState(password) if state is None else state
         text, face, start, end = self.password_window(state)
-        image.paste(self.password_text(text, face), (0, 0))
+        image.paste(self.password_text(text), (0, 0))
         if start:
             draw.line((6, 3, 2, 7, 6, 11), fill=1)
         else:
             draw.ellipse((1, 3, 7, 9), outline=1)
             draw.line((7, 6, 12, 6), fill=1)
             draw.line((10, 6, 10, 9), fill=1)
-        caret = min(self.width-5, 15+round(self.text_width(state.value[start:state.cursor], face)))
+        draw.rectangle((15, 3, 16, 4), fill=1)
+        draw.rectangle((15, 8, 16, 9), fill=1)
+        caret = min(self.width-5, PASSWORD_TEXT_X+round(self.text_width(state.value[start:state.cursor], face)))
         if cursor_visible:
             draw.line((caret, 1, caret, 12), fill=1, width=2 if state.field_focused else 1)
             if state.field_focused:

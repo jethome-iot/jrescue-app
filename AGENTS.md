@@ -90,6 +90,8 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   OLED opens the 2×2 main menu directly, without a Rescue/version splash or delay.
   OLED's four-item grid is Network / Flash / Info / Settings. Downloads use only the API's
   `images.sdcard` raw `.img`/`.img.xz` entry; burn and RAUC files are excluded.
+  The OLED Flash source is labeled `JetHome images` in English and
+  `Образы jethome` in Russian; its translation key remains `flash_api`.
 - **OLED uses the approved 2×2 main grid with HAOS-style inner screens.**
   UP/DOWN/LEFT/RIGHT selects a card without wrapping across edges, ENTER opens
   it, and HOME resets selection to the first card. All four captions remain
@@ -120,18 +122,28 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   do not restyle it while changing inner screens.
 - **The password editor is phone-style QWERTY**, with all three letter rows and
   a separate bottom control row visible at once. `keyboard_layout.py` shares state and geometry
-  between navigation and rendering. Shift affects one letter; double Shift within
-  0.5 seconds locks caps. `123`, `#+=` and `ABC` switch directly between layouts.
+  between navigation and rendering. Shift cycles through one uppercase letter,
+  Caps Lock, then lowercase on three presses, without any timing requirement.
+  Typing a letter consumes one-shot Shift; Caps Lock stays on until Shift is
+  pressed again. `123`, `#+=` and `ABC` switch directly between layouts.
   Space, backspace and OK remain visible, with no vertical keyboard scrolling.
   The space key is 46px wide and centered, with `.` to its left and `_` to its
   right. These two keys are shared by all layouts and removed from the other
   symbol rows; `$`, `/` and `-` remain on the number page. The footer dot is
   drawn as a clear 2×2-pixel mark. Each special character
   has one location. `None` slots are invisible and skipped by navigation;
-  never insert repeated characters to fill the screen.
+  never insert repeated characters to fill the screen. On `#+=`, the remaining
+  `, = \` keys run consecutively from the left of row two, with no holes between
+  them; unused slots follow the symbols rather than separating them.
   The password field uses 14px of height and 15px Liberation Sans Narrow text,
-  with a small key icon instead of a permanent `Pass:` label.
-  Empty input contains no `Password` placeholder: only the key and a caret that
+  with a small key icon and colon instead of a permanent `Pass:` label.
+  Two 2×2 dots form the colon, followed by a 3px gap; input starts at x=20.
+  Text drawing, cursor and scroll measurements share `PASSWORD_TEXT_X`.
+  Password characters reuse their exact key bitmaps through
+  `password_character()`; punctuation and fitted letters must have identical
+  size and shape in the field and on their keys. Cursor and scrolling use those
+  bitmaps' advances, including custom symbols and the shorter footer baseline.
+  Empty input contains no `Password` placeholder: only the key, colon and a caret that
   blinks every 0.5 seconds. Keyboard input uses a timed wait so blinking remains
   on the UI thread; any real button press makes the caret visible again.
   The three letter rows remain 14px each, with unchanged character glyph sizes.
@@ -139,8 +151,7 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   its captions are 11px. `#+=`/`123` toggles symbol pages at the left of row three.
   All 32 punctuation characters remain available across the two pages and
   shared controls. Ambiguous punctuation uses pixel-drawn contours; lowercase
-  `l` has a top-left hook on its key and in the password, with its extra advance
-  included in cursor and scroll measurements. No symbol names or cursor hints
+  `l` has a top-left hook on its key and in the password. No symbol names or cursor hints
   appear in the footer. Navigation uses the same rectangles as the renderer.
   UP from the top keyboard row focuses the password; LEFT/RIGHT moves its
   insertion cursor and DOWN returns to the same selected key. ENTER while the

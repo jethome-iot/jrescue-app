@@ -212,7 +212,7 @@ Other inner menus and two-line messages use a 20px line pitch instead of 25px.
 #### Password Keyboard
 
 ```
-[key] mypass|
+[key]: mypass|
  q w e r t y u i o p
   a s d f g h j k l
  ⇧ z x c v b n m ⌫
@@ -225,22 +225,28 @@ long input scrolls horizontally while the full value is retained.
 
 The three QWERTY rows and separate bottom controls stay visible together, with no
 vertical scrolling. UP/DOWN/LEFT/RIGHT moves between keys and ENTER selects.
-Shift capitalizes the next letter; double Shift within 0.5 seconds locks caps.
+Shift cycles through one uppercase letter, Caps Lock, and lowercase on three
+presses, with no timing requirement. Typing a letter consumes one-shot Shift;
+Caps Lock stays on until Shift is pressed again.
 `123` opens numbers, `#+=` opens more symbols, and `ABC` returns to letters.
 The bracket key inserts a space, backspace deletes, and OK submits. BACK/HOME cancels.
 Space occupies 46 pixels at the center of the bottom row, with `.` to its left
 and `_` to its right. These shortcuts are shared by all layouts and do not
 repeat in the other symbol rows; `$`, `/` and `-` remain on the number page.
 All 32 special characters remain available. Unused positions stay blank and
-navigation skips them. `123`/`ABC` and OK occupy the bottom corners; backspace
+navigation skips them. The `#+=` symbols are packed from the left without gaps
+between characters. `123`/`ABC` and OK occupy the bottom corners; backspace
 remains at the right of the third row. The symbol-page toggle is at the lower left.
 Ambiguous punctuation has distinct pixel contours. Lowercase `l` has a top hook
 on its key and in the password; cursor and scroll widths account for it.
 Menu `f` and `F` use a single-pixel vertical stroke to match the surrounding
 regular text; their size and spacing are unchanged.
-The password strip is 14px high and uses a small key icon instead of `Pass:`.
-When empty, it shows only the key and a blinking caret, without placeholder text.
-Its 15px Narrow text preserves space for the input without reducing keyboard glyphs.
+The password strip is 14px high and uses a small key icon followed by a colon
+and a 3px gap instead of `Pass:`. When empty, it shows the key, colon and a
+blinking caret, without placeholder text.
+The field reuses the exact bitmaps drawn on the keys, including custom symbols
+and fitted letters, so their size and shape match. Cursor and scrolling use
+the same character widths.
 UP from the top row focuses the password, LEFT/RIGHT moves the text cursor and
 scrolls the visible window, and DOWN returns to the selected key. Characters
 and backspace edit at the cursor without losing the hidden suffix or spaces.
@@ -366,7 +372,7 @@ Hardware Buttons Navigation:
 7. Use the QWERTY keyboard for the password:
    - UP/DOWN/LEFT/RIGHT to navigate characters
    - ENTER to type a character
-   - Shift for one uppercase letter; double Shift for Caps Lock
+   - Shift: one uppercase letter → Caps Lock → lowercase, with no timing limit
    - 123 / #+= / ABC switch number, symbol and alphabet pages
    - Navigate to OK and press ENTER to submit
 8. Wait for connection (2 seconds auto-return)
@@ -378,7 +384,7 @@ Hardware Buttons Navigation:
 ```
 1. Main menu → Navigate to "Flash"
 2. ENTER → Open Flash menu
-3. ENTER → Select "From API" (or "From USB")
+3. ENTER → Select "JetHome images" (or "From USB")
 4. Wait for the firmware list from the JetHome API
 5. UP/DOWN → Scroll through available images
 6. ENTER → Select image
