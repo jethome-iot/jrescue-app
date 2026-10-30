@@ -236,6 +236,8 @@ navigation skips them. `123`/`ABC` and OK occupy the bottom corners; backspace
 remains at the right of the third row. The symbol-page toggle is at the lower left.
 Ambiguous punctuation has distinct pixel contours. Lowercase `l` has a top hook
 on its key and in the password; cursor and scroll widths account for it.
+Menu `f` and `F` use a single-pixel vertical stroke to match the surrounding
+regular text; their size and spacing are unchanged.
 The password strip is 14px high and uses a small key icon instead of `Pass:`.
 When empty, it shows only the key and a blinking caret, without placeholder text.
 Its 15px Narrow text preserves space for the input without reducing keyboard glyphs.

@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 import math
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 from keyboard_layout import (SHIFT, BACKSPACE, SPACE, SUBMIT, NUMBERS, LETTERS,
@@ -66,14 +67,51 @@ class OledRenderer:
         return image, draw
 
     @staticmethod
+    @lru_cache(maxsize=128)
+    def _stem_pixels(character, face):
+        """Locate the extra column in f/F's doubled vertical stroke."""
+        mask = face.getmask(character, mode='1')
+        bounds = mask.getbbox()
+        if bounds is None:
+            return ()
+        glyph = Image.new('1', mask.size)
+        glyph.putdata(mask)
+        glyph = glyph.crop(bounds)
+        if glyph.width < 2:
+            return ()
+        counts = [sum(bool(glyph.getpixel((x, y))) for y in range(glyph.height))
+                  for x in range(glyph.width)]
+        stem = max(range(glyph.width-1), key=lambda x: min(counts[x:x+2]))
+        if min(counts[stem:stem+2]) <= glyph.height//2:
+            return ()
+        return tuple((stem+1, y) for y in range(glyph.height)
+                     if glyph.getpixel((stem, y)) and glyph.getpixel((stem+1, y))
+                     and (stem == 0 or not glyph.getpixel((stem-1, y)))
+                     and (stem+2 == glyph.width or not glyph.getpixel((stem+2, y))))
+
+    @staticmethod
     @lru_cache(maxsize=512)
     def _glyphs(value, face):
-        """Crop actual ink; font metrics can contain empty bottom rows."""
+        """Crop ink and correct the body font's heavier f/F stems."""
         x0, y0, x1, y1 = face.getbbox(value)
         mask = Image.new('1', (max(1, x1-x0)+8, max(1, y1-y0)+8))
         draw = ImageDraw.Draw(mask)
         draw.fontmode = '1'
         draw.text((4-x0, 4-y0), value, font=face, fill=1)
+        if ('f' in value or 'F' in value) and Path(
+                getattr(face, 'path', '')).name == 'LiberationSans-Regular.ttf':
+            for index, character in enumerate(value):
+                if character not in 'fF':
+                    continue
+                # Preserve shaping and spacing; remove only the duplicate stem.
+                advance = draw.textlength(value[:index+1], font=face)-draw.textlength(character, font=face)
+                gx, gy, _, _ = face.getbbox(character)
+                ink = face.getmask(character, mode='1').getbbox()
+                if ink is None:
+                    continue
+                left, top = round(4-x0+advance)+gx+ink[0], 4-y0+gy+ink[1]
+                for x, y in OledRenderer._stem_pixels(character, face):
+                    mask.putpixel((left+x, top+y), 0)
         bounds = mask.getbbox()
         return mask.crop(bounds) if bounds else Image.new('1', (1, 1))
 

@@ -103,6 +103,9 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   All OLED text uses regular weight, including headers and selected rows.
   Inner screens use bundled Liberation Sans Regular; the keyboard uses bundled
   Liberation Sans Narrow Regular. Main captions keep system DejaVu Sans Condensed.
+  Body/header `f` and `F` have their doubled rasterized stem thinned to one
+  pixel, matching the approved preview. Apply this only to Liberation Sans
+  Regular; keep glyph bounds and spacing, main captions and keyboard unchanged.
   Inner headers are 14px white on black with a thin underline, body text 14px,
   keyboard glyphs up to 15px, progress up to 19px. Body text was reduced by 1px
   at the user's request; preserve header, main-grid and keyboard sizes.
