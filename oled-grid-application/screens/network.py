@@ -16,6 +16,28 @@ from network import get_network_handler
 import time
 
 
+def wifi_error_message(code):
+    """Keep the cause and next step in the display's two visible body rows."""
+    reason, hint = {
+        'wrong_password': ('wifi_wrong_password', 'wifi_enter_again'),
+        'bad_password_format': ('wifi_bad_password', 'wifi_enter_again'),
+        'auth_failed': ('wifi_auth_failed', 'wifi_check_password'),
+        'not_found': ('wifi_not_found', 'wifi_scan_again'),
+        'no_dhcp': ('wifi_no_dhcp', 'wifi_check_router'),
+        'timeout': ('wifi_timeout', 'wifi_try_again'),
+        'radio_busy': ('wifi_radio_busy', 'wifi_check_adapter'),
+        'no_wifi': ('wifi_no_adapter', 'wifi_check_adapter'),
+        'unavailable': ('wifi_unavailable', 'wifi_restart'),
+    }.get(code, ('wifi_connect_failed', 'wifi_try_again'))
+    return t(reason)+'\n'+t(hint)
+
+
+def _wifi_error(menu, handler=None, code=None):
+    """Show the diagnosis first instead of hiding it behind a long SSID."""
+    code = code or getattr(handler, 'last_error_code', 'unknown')
+    return menu.show_message(t('wifi_failed'), wifi_error_message(code))
+
+
 def network_menu(menu):
     """
     Network setup menu
@@ -60,7 +82,7 @@ def wifi_setup(menu):
     # Get network handler
     handler = get_network_handler()
     if not handler:
-        result = menu.show_message(t("error"), "NetworkManager\nnot found")
+        result = _wifi_error(menu, code='unavailable')
         if result == -1:
             return -1  # Home
         return None  # Back
@@ -75,7 +97,10 @@ def wifi_setup(menu):
     networks = menu.run_working(t("wifi_title"), t("wifi_scanning"), handler.scan_wifi)
 
     if not networks:
-        result = menu.show_message(t("wifi_title"), "No networks\nfound")
+        if getattr(handler, 'last_error_code', ''):
+            result = _wifi_error(menu, handler)
+        else:
+            result = menu.show_message(t('wifi_title'), t('wifi_no_networks')+'\n'+t('wifi_scan_again'))
         if result == -1:
             return -1  # Home
         return None  # Back
@@ -117,12 +142,12 @@ def wifi_setup(menu):
                 time.sleep(2)  # Show success message for 2 seconds
                 return  # Exit to Network menu
             else:
-                # Failed - show error with OK button, then retry
-                error_msg = f"{t('wifi_failed')}\n{ssid}\n{t('wifi_wrong_password')}"
-                result = menu.show_message(t("error"), error_msg)
+                result = _wifi_error(menu, handler)
                 if result == -1:
                     return -1  # Home
-                # Loop will repeat password input
+                if getattr(handler, 'last_error_code', '') not in (
+                        'wrong_password', 'bad_password_format', 'auth_failed'):
+                    return None
     else:
         # Open network - no password needed
         password = None
@@ -133,7 +158,7 @@ def wifi_setup(menu):
             menu.show_message(t("wifi_connected"), f"{ssid}", wait_for_key=False, success=True)
             time.sleep(2)  # Show success message for 2 seconds
         else:
-            menu.show_message(t("wifi_failed"), f"{ssid}")
+            return _wifi_error(menu, handler)
 
 
 def ethernet_status(menu):

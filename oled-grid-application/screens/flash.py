@@ -19,6 +19,15 @@ import config as src_config
 from .reboot import reboot_after_flash
 
 
+def _hold_confirmation(menu, title):
+    """Use reboot's physical guard; let callers clean RAM before error dialogs."""
+    try:
+        return menu.hold_to_confirm(title, t('reboot_hold_center'),
+                                    t('reboot_hold_time'), seconds=3.0), None
+    except (OSError, RuntimeError):
+        return None, t('reboot_input_failed')
+
+
 def flash_menu(menu):
     """
     Flash image menu - select source
@@ -86,39 +95,53 @@ def flash_from_http(menu):
 
     image = images[selected]
 
-    # Confirm download with horizontal choice
     size_mb = image.get('size', 0) // (1024 * 1024) if 'size' in image else image.get('size_mb', 0)
-    confirm_msg = f"{t('flash_confirm_download')}\n\n{t('size')}: {size_mb}MB"
-    choice = menu.horizontal_choice(confirm_msg, t("no"), t("yes"))
+    title = f"{t('flash_confirm_download')} {size_mb}MB"
+    choice, error = _hold_confirmation(menu, title)
+    if error:
+        return menu.show_message(t('error'), error)
     if choice == -1:
         return -1  # Home
-    elif choice != 1:  # Not YES (None or 0)
+    if choice is not True:
         return None  # Cancelled
 
-    def download(progress):
+    downloaded = None
+
+    def download(progress, cancel):
         """Use the downloader's measured bytes and report completion after rename."""
+        nonlocal downloaded
+
         def report(percent, amount='', speed=''):
             """Use the second text row for bytes, without crowding it with speed/ETA."""
             progress(percent, amount)
 
-        path = handler.download_file(image['url'], dest_filename=image['filename'],
-                                     progress_cb=report)
-        if path:
+        downloaded = handler.download_file(image['url'], dest_filename=image['filename'],
+                                           progress_cb=report, cancel_event=cancel)
+        if downloaded and not cancel.is_set():
             progress(100)
-        return path
-
-    downloaded = menu.run_progress(t("flash_downloading"), image['name'], download)
-    if not downloaded:
-        return menu.show_message(t("error"), handler.last_error or t("download_failed"))
+        return downloaded
 
     try:
+        try:
+            _, cancelled = menu.run_download(t("flash_downloading"), image['name'], download)
+        except Exception as exc:
+            if downloaded:
+                handler.discard_download(downloaded)
+            return menu.show_message(t('error'), str(exc))
+        if cancelled is not None:
+            return -1 if cancelled == -1 else None
+        if not downloaded:
+            return menu.show_message(t("error"), handler.last_error or t("download_failed"))
+
         image_name = image.get('name', image.get('filename', 'Image'))
         if menu.show_message(t("flash_downloaded"), image_name, success=True) == -1:
             return -1
         return perform_flash(menu, downloaded, image_name,
                              cleanup=lambda: handler.discard_download(downloaded))
     finally:
-        handler.discard_download(downloaded)
+        # Also handles a cancel arriving just after the final file was renamed.
+        if downloaded:
+            handler.discard_download(downloaded)
 
 
 def flash_from_usb(menu):
@@ -211,29 +234,29 @@ def perform_flash(menu, image_path, image_name=None, cleanup=None):
     """
     failure = None
     try:
-        confirm_msg = f"{t('flash_confirm_flash')}\n\n{t('flash_warning')}"
-        choice = menu.horizontal_choice(confirm_msg, t("no"), t("yes"))
-        if choice == -1:
-            return -1
-        if choice != 1:
-            return None
+        choice, failure = _hold_confirmation(menu, t('flash_warning'))
+        if failure is None:
+            if choice == -1:
+                return -1
+            if choice is not True:
+                return None
 
-        flash_handler = FlashHandler(emmc_device=src_config.EMMC_DEVICE)
+            flash_handler = FlashHandler(emmc_device=src_config.EMMC_DEVICE)
 
-        def write(progress):
-            """Show measured progress without repeating the target device name."""
-            def report(percent, name='', detail=''):
-                progress(percent, '' if str(detail).startswith('/dev/') else detail)
+            def write(progress):
+                """Show measured progress without repeating the target device name."""
+                def report(percent, name='', detail=''):
+                    progress(percent, '' if str(detail).startswith('/dev/') else detail)
 
-            return flash_handler.flash_image(
-                image_path, skip_confirmation=True,
-                progress_cb=report)
+                return flash_handler.flash_image(
+                    image_path, skip_confirmation=True,
+                    progress_cb=report)
 
-        try:
-            success = menu.run_progress(
-                t("flash_progress"), image_name or os.path.basename(image_path), write)
-        except Exception as exc:
-            failure = str(exc)
+            try:
+                success = menu.run_progress(
+                    t("flash_progress"), image_name or os.path.basename(image_path), write)
+            except Exception as exc:
+                failure = str(exc)
     finally:
         # Release RAM before any completion/reboot dialog can wait for input.
         if cleanup:

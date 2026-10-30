@@ -794,13 +794,16 @@ def show_wait_screen(title: str, message: str, fn, *args, **kwargs):
     return state['result'], buf.getvalue()
 
 
-def show_progress_screen(title: str, worker) -> tuple:
+def show_progress_screen(title: str, worker, cancel_event=None) -> tuple:
     """
     Run worker(progress) in a thread while drawing a framed progress screen.
 
     worker receives `progress(percent, *lines)`: percent is 0-100 or None
     (indeterminate), lines are short status strings shown under the bar.
     stdout/stderr of the worker are captured.
+    Only download callers supply cancel_event: Esc requests cancellation, and
+    the screen stays open until the worker has closed its files. Flash callers
+    omit it, so keys never interrupt a write.
 
     Returns:
         (result, captured_text). If worker raised, result is the exception.
@@ -831,17 +834,20 @@ def show_progress_screen(title: str, worker) -> tuple:
         stdscr.nodelay(True)
         spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         i = 0
-        thread = threading.Thread(target=runner, daemon=True)
-        thread.start()
         while not state['done']:
+            if cancel_event is not None and stdscr.getch() == 27:
+                cancel_event.set()
             stdscr.erase()
-            y0, x0, body_h, body_w = _draw_frame(stdscr, title)
+            cancelling = cancel_event is not None and cancel_event.is_set()
+            hint = _hint('hint_download_cancel', 'Esc cancel download') if cancel_event is not None else ''
+            heading = _hint('download_cancelling', 'Canceling download') if cancelling else title
+            y0, x0, body_h, body_w = _draw_frame(stdscr, heading, hint)
             w = stdscr.getmaxyx()[1]
             y = y0 + max(1, body_h // 2 - 1)
             pct = state['percent']
             bar_w = max(10, min(50, body_w - 10))
             try:
-                if pct is None:
+                if pct is None or cancelling:
                     text = f"{spinner[i % len(spinner)]} working..."
                     stdscr.addstr(y, max(x0, (w - len(text)) // 2), text)
                 else:
@@ -858,13 +864,22 @@ def show_progress_screen(title: str, worker) -> tuple:
             stdscr.refresh()
             i += 1
             curses.napms(100)
-        thread.join()
 
+    # Start exactly once, including when curses initialization/drawing fails.
+    # Retrying runner() here could start a second eMMC writer.
+    thread = threading.Thread(target=runner)
+    thread.start()
     try:
         curses.wrapper(ui)
     except Exception:
-        if not state['done']:
-            runner()
+        if cancel_event is not None:
+            cancel_event.set()
+    except BaseException:
+        if cancel_event is not None:
+            cancel_event.set()
+        raise
+    finally:
+        thread.join()
     return state['result'], buf.getvalue()
 
 

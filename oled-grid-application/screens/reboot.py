@@ -8,7 +8,7 @@ from utils import run_command
 
 def _request_reboot(menu):
     """Keep the existing systemd request safe from its own service shutdown."""
-    menu.display.draw_hold_confirmation(t('reboot_title'), t('wait'), '', 100)
+    menu.display.draw_hold_confirmation(t('reboot_title'), t('reboot_wait'), '', 100)
     code, _, error = run_command(['systemctl', '--no-block', 'reboot'], check=False)
     if code:
         print('Reboot request failed: {}'.format(error))

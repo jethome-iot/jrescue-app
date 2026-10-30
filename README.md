@@ -167,10 +167,18 @@ and USB; there is no separate RAM/downloaded-images menu.
 
 Downloaded images use the temporary RAM cache `/tmp/rescue`. Every application
 download first removes old images and partial files, then starts from zero.
-Declining the flash confirmation (NO, BACK or HOME) discards the downloaded image;
+Canceling the flash hold confirmation with BACK or HOME discards the downloaded image;
 it is also removed after the write, before the reboot screen. Failed or canceled
 transfers leave no partial file. Cleanup uses ordinary file deletion, with no
 content overwrite, and excludes USB sources and images currently being flashed.
+
+Server downloads can be canceled while running: Back returns to the Flash
+menu on OLED, Home returns to the main grid, and Esc cancels in the console.
+The web interface has a download cancel button. Cancellation waits for the HTTP
+worker to close its response and release the RAM cache before returning; a
+stalled request may need its network timeout to expire. A cancellation arriving
+just after completion also removes that image. Writing to eMMC cannot be
+canceled through any frontend: the application waits for the writer to finish.
 
 #### Network Menu
 
@@ -222,6 +230,9 @@ Other inner menus and two-line messages use a 20px line pitch instead of 25px.
 Selecting a secured network opens the editor directly, without an extra
 confirmation. The password field has no white fill and starts at the left edge;
 long input scrolls horizontally while the full value is retained.
+Connection failures show their cause and a next step in two visible rows.
+Password errors reopen the editor; unavailable networks, DHCP failures and
+timeouts return to the network menu. Long SSIDs cannot hide the error reason.
 
 The three QWERTY rows and separate bottom controls stay visible together, with no
 vertical scrolling. UP/DOWN/LEFT/RIGHT moves between keys and ENTER selects.
@@ -307,19 +318,19 @@ the OLED omits the target device label. Unknown progress uses an animated arc.
 
 ```
 ┌─────────────────────────────────┐
-│ Flash image?                    │
+│ Erase all data?                 │
 ├─────────────────────────────────┤
 │                                 │
-│       Erase all data?           │
-│                                 │
-│        ┌────┐   ┌────┐          │
-│        │ NO │   │YES │          │ ← Selected: NO
-│        └────┘   └────┘          │
+│       ◯       Hold center       │
+│               for 3 s           │
 │                                 │
 └─────────────────────────────────┘
 ```
 
-Navigate with LEFT/RIGHT buttons, ENTER to select.
+Download and flash confirmations use the same three-second center hold as
+reboot. The download title includes its size; the flash title warns that data
+will be erased. A fresh press is required, releasing resets the circle, and
+BACK/HOME cancels; stick directions do not cancel. Button input errors never start the operation.
 
 #### System Information
 
@@ -339,7 +350,7 @@ Navigate with LEFT/RIGHT buttons, ENTER to select.
 ### Reboot
 
 Settings and the post-flash screen require a fresh continuous three-second hold
-of the center button. Releasing retracts the circle; Back/Left/Home cancels.
+of the center button. Releasing retracts the circle; Back/Home cancels.
 The opening press and autorepeat do not count. The systemd reboot request is
 nonblocking, so shutdown does not wait on the application's own service.
 
@@ -388,9 +399,9 @@ Hardware Buttons Navigation:
 4. Wait for the firmware list from the JetHome API
 5. UP/DOWN → Scroll through available images
 6. ENTER → Select image
-7. LEFT/RIGHT → select YES, ENTER → confirm download
+7. Hold center for 3 seconds to confirm downloading
 8. Wait for download (circular progress shown)
-9. LEFT/RIGHT → select YES in the NO/YES dialog, ENTER → confirm flashing
+9. Hold center for 3 seconds on the erase warning to confirm flashing
 10. Wait for flashing (circular progress shown)
 11. Hold center for 3 seconds to reboot, or BACK/HOME to return
 ```

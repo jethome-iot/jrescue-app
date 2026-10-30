@@ -85,6 +85,14 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   it does not recurse into directories or delete USB sources. Completed download
   identities keep repeated cleanup from deleting a replacement at the same path.
   Explicit generic download destinations outside the cache still support resume.
+  Server downloads can be canceled with Back/Home on OLED, Esc in the TUI,
+  or the web cancel action. Cancellation signals the worker and keeps the UI
+  waiting until the response is closed, partials are unlinked and the cache lock
+  is released; a just-completed image is also discarded. OLED Home then returns
+  to the main grid. Only `Menu.run_download` receives a cancel token; flash uses
+  `run_progress` without one. TUI flash progress also has no cancel token and
+  must never retry its worker after a curses failure. Button input/display
+  failures cancel downloads, while active writes are always joined to completion.
 - **OLED and console start in English.** Language selection and reboot live in
   Settings, with no startup language screen or separate RAM image source.
   OLED opens the 2×2 main menu directly, without a Rescue/version splash or delay.
@@ -174,6 +182,12 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   `02-wifi-keyboard.png`, `03-demo.gif`, and `04-wifi.gif`, with a short README;
   `05-inner-menus.png` shows the current inner-screen typography.
   `06-wifi-networks.png` shows compact short and wrapped SSIDs in ENG/RUS.
+  `11-confirmations.gif` and `12-confirmations.png` show the current download
+  and flash hold confirmations in the same circular style as reboot.
+  `13-wifi-errors.png` and `14-wifi-errors.gif` show actual Wi-Fi error messages
+  with the visible cause and next-step hint.
+  `15-download-cancel.png` and `16-download-cancel.gif` show the existing spinner
+  while a canceled server download closes, followed by return to the Flash menu.
   The user approved trying the four-row password-cursor preview; it is now
   implemented. The user rejected an eye button and a separate password overview:
   do not add them. The centered 46px space, `.`/`_` shortcuts, clear symbols and
@@ -183,17 +197,29 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   are implemented. Keep only the current design in the preview folder.
   Font binaries and their individual licenses live in `oled-grid-application/fonts/`
   and ship with app-only updates; do not depend on a board-side font installation.
-- **OLED reboot requires a fresh continuous three-second center hold**, both
-  in Settings and after flashing. The opening press and key autorepeat do not
-  count; release rolls back, and Back/Left/Home cancel. Lost button state must
-  never trigger a reboot. Flash/download confirmations still default to NO.
+- **OLED download, flash and reboot require a fresh continuous three-second
+  center hold.** Reboot uses this both in Settings and after flashing. The
+  opening press and key autorepeat do not count; release rolls back, and
+  Back/Home cancel; stick directions never cancel. Flash confirmation keeps
+  the erase warning in its title; download confirmation includes the image size. Only an explicit
+  completed hold starts the action. Lost button state or input errors must
+  never start downloading, flashing or rebooting. Canceling flash and input
+  failures discard downloaded RAM images before any error dialog.
   Keep the nonblocking systemd
   reboot request so shutdown cannot wait on the application's own service.
+  After a completed reboot hold show `reboot_wait` (`Rebooting...` in English),
+  rather than the generic `Wait...`; Settings and post-flash reboot share it.
   Blocking network/download/flash operations still draw only on the UI thread
   and use one joined worker through `Menu.run_working` / `run_progress`.
 - **Network menus expose WiFi connect and Ethernet status only.** The setup AP
   is raised by systemd boot scripts; there is no Phone AP / manual AP action.
   Direct Wi-Fi connect still releases the single radio from an active AP.
+  Wi-Fi failures use `NetworkHandler.last_error_code` (NM numeric device reason
+  plus nmcli diagnostics); `last_error` retains redacted details. Both reset on
+  each attempt. OLED shows the cause first and a next-step hint in exactly two
+  body rows, never behind an SSID that could push the cause off-screen. Only
+  credential/auth failures reopen the password editor; other failures return
+  to the network menu. Connection commands have bounded timeouts.
   Ethernet status screens show interface, cable link and IP; omit MAC and speed.
 - **The console UI is curses-only, including waits and progress.** Menus/dialogs:
   `show_menu`, `show_horizontal_menu`, `input_dialog`, `confirm_action`; screens:

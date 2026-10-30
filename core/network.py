@@ -45,12 +45,45 @@ def _nmcli_split(line: str) -> List[str]:
     return fields
 
 
+def classify_wifi_error(text: str, reason: int = None, returncode: int = None) -> str:
+    """Classify connection failures, using NM's numeric reason when available."""
+    low = (text or '').lower()
+    for needles, code in (
+        (('networkmanager is not running', 'could not connect to networkmanager'), 'unavailable'),
+        (('no network with ssid', 'ssid-not-found', 'no access point'), 'not_found'),
+        (('ip configuration could not be reserved', 'ip-config', 'dhcp'), 'no_dhcp'),
+        (('strictly unmanaged', 'not managed', 'wi-fi is disabled', 'wifi is disabled', 'rfkill'), 'radio_busy'),
+    ):
+        if any(needle in low for needle in needles):
+            return code
+    if '802-11-wireless-security.psk' in low and any(word in low for word in ('invalid', 'missing', 'length')):
+        return 'bad_password_format'
+    if returncode == 8:
+        return 'unavailable'
+    # NMDeviceStateReason values are stable and independent of nmcli's locale.
+    code = {3: 'radio_busy', 5: 'no_dhcp', 6: 'no_dhcp', 7: 'wrong_password',
+            8: 'auth_failed', 9: 'auth_failed', 10: 'auth_failed', 11: 'timeout',
+            15: 'no_dhcp', 16: 'no_dhcp', 17: 'no_dhcp', 35: 'radio_busy',
+            36: 'no_wifi', 53: 'not_found'}.get(reason)
+    if code:
+        return code
+    if returncode == 3 or 'timed out' in low or 'timeout' in low:
+        return 'timeout'
+    if 'secrets were required' in low or 'no-secrets' in low:
+        return 'wrong_password'
+    if 'supplicant' in low or 'authentication failed' in low:
+        return 'auth_failed'
+    return 'unknown'
+
+
 class NetworkHandler:
     """Base class for network handlers"""
 
     def __init__(self, interface: str = None):
         self.wifi_interface = interface or config.WIFI_INTERFACE
         self.eth_interface = config.ETHERNET_INTERFACE
+        self.last_error = ''
+        self.last_error_code = ''
 
     def scan_wifi(self) -> List[dict]:
         """Scan for WiFi networks. Returns list of dicts with SSID, signal, security"""
@@ -204,21 +237,28 @@ class NetworkManagerHandler(NetworkHandler):
 
     def scan_wifi(self) -> List[dict]:
         """Scan for WiFi networks using nmcli"""
-        if not self.available or not self.has_wifi():
+        self.last_error, self.last_error_code = '', ''
+        if not self.available:
+            self.last_error_code = 'unavailable'
+            return []
+        if not self.has_wifi():
+            self.last_error_code = 'no_wifi'
             return []
 
         print_info("Scanning for WiFi networks...")
 
         # Trigger a rescan (ignore "scanning already in progress"), then list.
-        run_command(['nmcli', 'device', 'wifi', 'rescan'], check=False)
+        run_command(['nmcli', 'device', 'wifi', 'rescan'], check=False, timeout=15)
         time.sleep(2)
 
         returncode, stdout, stderr = run_command(
             ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
-            check=False
+            check=False, timeout=15
         )
 
         if returncode != 0:
+            self.last_error = (stderr or stdout or '').strip()
+            self.last_error_code = classify_wifi_error(self.last_error, returncode=returncode)
             print_error(f"WiFi scan failed: {stderr}")
             return []
 
@@ -247,18 +287,20 @@ class NetworkManagerHandler(NetworkHandler):
 
     def connect_wifi(self, ssid: str, password: str = None) -> bool:
         """Connect to WiFi using nmcli"""
+        self.last_error, self.last_error_code = '', ''
         if not self.available:
+            self.last_error_code = 'unavailable'
             return False
 
         print_info(f"Connecting to '{ssid}'...")
 
-        cmd = ['nmcli', 'device', 'wifi', 'connect', ssid]
+        cmd = ['nmcli', '--wait', '35', 'device', 'wifi', 'connect', ssid]
         if password:
             cmd += ['password', password]
         if self.wifi_interface:
             cmd += ['ifname', self.wifi_interface]
 
-        returncode, stdout, stderr = run_command(cmd, check=False)
+        returncode, stdout, stderr = run_command(cmd, check=False, timeout=50)
 
         if returncode == 0:
             print_success(f"Connected to '{ssid}'")
@@ -266,8 +308,20 @@ class NetworkManagerHandler(NetworkHandler):
             wait_with_spinner(3, "Obtaining IP address")
             return True
 
-        print_error(f"Failed to connect: {stderr}")
-        print_error(f"WiFi connection failed: {stderr}")
+        reason = None
+        if self.wifi_interface:
+            code, output, _ = run_command(
+                ['nmcli', '-g', 'GENERAL.REASON', 'device', 'show', self.wifi_interface],
+                check=False, timeout=5)
+            if code == 0:
+                try:
+                    reason = int(output.strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+        detail = (stderr or stdout or '').strip()
+        self.last_error_code = classify_wifi_error(detail, reason, returncode)
+        self.last_error = detail.replace(password, '***') if password else detail
+        print_error(f"WiFi connection failed: {self.last_error}")
         return False
 
     def get_connection_status(self) -> dict:

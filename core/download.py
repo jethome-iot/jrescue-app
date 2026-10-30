@@ -175,6 +175,8 @@ class DownloadHandler:
             dest_filename: Override destination filename
             progress_cb: Optional callable(percent_or_None, *status_lines);
                          when given, progress goes to it instead of stdout
+            cancel_event: Optional threading.Event; only downloads support cancel.
+                          The caller must wait for this method to close its files.
 
         Returns:
             Path to downloaded file or None if failed
@@ -243,6 +245,9 @@ class DownloadHandler:
             else:
                 response = urllib.request.urlopen(req, timeout=config.NETWORK_TIMEOUT)
 
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError('Download cancelled')
+
             status = response.getcode()
             if start_byte and status == 200:
                 # A server may ignore Range. Restart instead of appending a
@@ -277,11 +282,14 @@ class DownloadHandler:
                 start_time = time.time()
                 last_update = start_time
                 chunk_size = config.DOWNLOAD_CHUNK_SIZE
+                # HTTPResponse.read1 returns available bytes instead of waiting
+                # to fill a whole megabyte before checking for cancellation.
+                read = getattr(response, 'read1', response.read) if cancel_event is not None else response.read
 
                 while True:
                     if cancel_event is not None and cancel_event.is_set():
                         raise InterruptedError('Download cancelled')
-                    chunk = response.read(chunk_size)
+                    chunk = read(chunk_size)
                     if cancel_event is not None and cancel_event.is_set():
                         raise InterruptedError('Download cancelled')
                     if not chunk:
@@ -333,6 +341,9 @@ class DownloadHandler:
 
             print()  # New line after progress
 
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError('Download cancelled')
+
             # Verify download completed
             if total_size and os.path.getsize(temp_path) != total_size:
                 self.last_error = f"Download incomplete: {os.path.getsize(temp_path)} / {total_size} bytes"
@@ -347,6 +358,11 @@ class DownloadHandler:
             print_success(f"Download complete: {dest_path}")
             print_info(f"Downloaded {dest_filename}")
             return dest_path
+
+        except InterruptedError:
+            self.last_error = 'Download cancelled'
+            print_warning(self.last_error)
+            return None
 
         except urllib.error.HTTPError as e:
             self.last_error = str(e)
@@ -460,6 +476,7 @@ def download_image_interactive(handler=None) -> Optional[str]:
         Path to downloaded file or None
     """
     from utils import show_progress_screen, show_text_screen
+    import threading
 
     handler = handler if handler is not None else DownloadHandler()
 
@@ -478,12 +495,23 @@ def download_image_interactive(handler=None) -> Optional[str]:
         return None
 
     # Download from the JetHome API (always a full URL)
-    def worker(progress):
-        progress(None, image['filename'])
-        return handler.download_file(image['url'], dest_filename=image['filename'],
-                                     progress_cb=progress)
+    cancel = threading.Event()
+    downloaded = None
 
-    result, output = show_progress_screen("Downloading", worker)
+    def worker(progress):
+        nonlocal downloaded
+        progress(None, image['filename'])
+        downloaded = handler.download_file(image['url'], dest_filename=image['filename'],
+                                           progress_cb=progress, cancel_event=cancel)
+        return downloaded
+
+    try:
+        result, output = show_progress_screen("Downloading", worker, cancel_event=cancel)
+    finally:
+        if cancel.is_set() and downloaded:
+            handler.discard_download(downloaded)
+    if cancel.is_set():
+        return None
 
     if isinstance(result, Exception) or not result:
         tail = [ln for ln in output.strip().splitlines() if ln.strip()][-6:]

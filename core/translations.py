@@ -188,6 +188,8 @@ TRANSLATIONS = {
         # Curses chrome (bottom hint bars)
         "hint_menu": "↑↓ move   Enter select   1-9 jump   Esc back",
         "hint_hmenu": "←→ move   Enter select   Esc back",
+        "hint_download_cancel": "Esc cancel download",
+        "download_cancelling": "Canceling download",
         "hint_input": "Tab/↑↓ focus   Enter select   Esc cancel",
         "hint_text_scroll": "↑↓ scroll   Enter/Esc — back",
         "hint_text": "Enter/Esc — back",
@@ -392,6 +394,8 @@ TRANSLATIONS = {
         # Curses chrome (bottom hint bars)
         "hint_menu": "↑↓ выбор   Enter выбрать   1-9 переход   Esc назад",
         "hint_hmenu": "←→ выбор   Enter выбрать   Esc назад",
+        "hint_download_cancel": "Esc отменить скачивание",
+        "download_cancelling": "Отмена скачивания",
         "hint_input": "Tab/↑↓ фокус   Enter выбрать   Esc отмена",
         "hint_text_scroll": "↑↓ прокрутка   Enter/Esc — назад",
         "hint_text": "Enter/Esc — назад",

@@ -208,7 +208,7 @@ class Menu:
                 for code, value in events:
                     if value == 1 and code == KEY_HOME:
                         return -1
-                    if value == 1 and code in (KEY_BACK, KEY_LEFT):
+                    if value == 1 and code == KEY_BACK:
                         return None
                     if code != KEY_ENTER or value == 2:
                         continue
@@ -221,7 +221,7 @@ class Menu:
                         started, rollback, armed = now, None, False
 
                 # Also check the real key state before completing a hold: a
-                # missed release event must never cause an unintended reboot.
+                # missed release event must never trigger an unintended action.
                 if KEY_ENTER not in self.input.get_pressed_keys():
                     if started is not None:
                         rollback = (progress(now), now)
@@ -255,11 +255,22 @@ class Menu:
         """Run worker(progress_cb) once and draw its actual progress on the UI thread."""
         return self._run_operation(title, message, worker, True)
 
-    def _run_operation(self, title, message, worker, use_progress):
+    def run_download(self, title, message, worker):
+        """Run worker(progress, cancel_event); return (result, cancel_navigation).
+
+        Navigation is None on completion, 0 for Back, or -1 for Home.
+        Cancellation waits for the worker to close its file and response.
+        """
+        cancel = threading.Event()
+        return self._run_operation(title, message, lambda report: worker(report, cancel),
+                                   True, cancel_event=cancel)
+
+    def _run_operation(self, title, message, worker, use_progress, cancel_event=None):
         """Keep the operation alive even if drawing fails; never start it twice."""
         done = threading.Event()
         lock = threading.Lock()
         state = {'percent': None, 'lines': (), 'result': None, 'error': None}
+        cancelled = None
 
         def report(percent, *lines):
             with lock:
@@ -273,27 +284,45 @@ class Menu:
             finally:
                 done.set()
 
+        if cancel_event is not None:
+            self.input.flush_events()
         thread = threading.Thread(target=run)
         thread.start()
         frame = 0
         try:
             while not done.is_set():
+                # Flashing never enters this branch: it has no cancellation token.
+                if cancel_event is not None and cancelled is None:
+                    for code, value in self.input.read_key_events(timeout=0):
+                        if value == 1 and code in (KEY_BACK, KEY_HOME):
+                            cancelled = -1 if code == KEY_HOME else 0
+                            cancel_event.set()
+                            break
                 with lock:
                     percent, lines = state['percent'], state['lines']
-                if use_progress and percent is not None:
+                if cancelled is not None:
+                    self.show_working(t('download_cancelling'), t('wait'), frame)
+                elif use_progress and percent is not None:
                     self.show_progress(title, message, percent, str(lines[-1]) if lines else '')
                 else:
                     self.show_working(title, message, frame)
                 frame += 1
                 done.wait(1 / config.OLED_ANIMATION_FPS)
-            if use_progress and state['percent'] is not None and state['error'] is None:
+            if (cancelled is None and use_progress and state['percent'] is not None
+                    and state['error'] is None):
                 self.show_progress(title, message, state['percent'],
                                    str(state['lines'][-1]) if state['lines'] else '')
+        except BaseException:
+            if cancel_event is not None:
+                cancel_event.set()
+            raise
         finally:
             thread.join()
             self.input.flush_events()
         if state['error'] is not None:
             raise state['error']
+        if cancel_event is not None:
+            return state['result'], cancelled
         return state['result']
 
     def input_text(self, title, prompt="", initial=""):
