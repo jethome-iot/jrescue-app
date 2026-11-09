@@ -149,9 +149,9 @@ navigation. Present on **JetHub D3 (J310)**; started there by
 All four actions remain visible. UP/DOWN/LEFT/RIGHT selects a card without
 wrapping across edges; ENTER opens it, and HOME resets to Network. Captions are
 regular and fitted to the 128×64 panel, with wider, stronger pixel icons for the
-0.96-inch display. Settings uses a single cog icon. Info has Device, Memory and
-Versions entries. Memory shows RAM/eMMC rings and used/total figures together;
-there is no CPU gauge, uptime or background telemetry polling.
+0.96-inch display. Settings uses a single cog icon. Info contains Device,
+Version and Web, showing the model, recovery build version and current web links. It has no Memory
+entry, app version, uptime or telemetry gauges.
 Inner screens use the selected 02 Liberation Sans style, plain white titles with
 a thin underline, compact text spacing and
 circular feedback. Page changes are immediate, without slide transitions.
@@ -166,7 +166,7 @@ Settings contains Language, Reboot, Power off and Display, in that order. Displa
 30 seconds, 1 minute (default), or Never; changes are kept in RAM only. Lists
 focus the current setting, and Back/Home leaves it unchanged.
 Selection lists and Network status pages show their position and total (e.g. `2/4`) at the top
-right, with scroll arrows immediately to the left when more rows are available.
+right. The numeric counter is the only paging indicator; headers have no scroll arrows.
 The OLED goes dark after one minute without button input. The first press wakes
 the display and is consumed until release. Downloads, writes and hold
 confirmations remain visible; finishing an operation starts a fresh idle period.
@@ -206,7 +206,7 @@ The two OLED network actions are WiFi connect and Network status. The setup AP i
 started automatically by the systemd boot decision; there is no Phone AP or
 manual AP start/stop item in the application. Network status shows every detected
 Ethernet and Wi-Fi adapter, including disconnected ones, on separate pages.
-UP/DOWN changes the page; the top right shows its number/total and available directions.
+UP/DOWN changes the page; the top right shows only its number/total.
 ENTER refreshes the status while keeping the current page; BACK/HOME returns.
 Each page shows the adapter type, IPv4 address and Internet or link state.
 MAC and speed are omitted. Viewing status does not interrupt Wi-Fi or the AP.
@@ -336,41 +336,42 @@ the OLED omits the target device label. Unknown progress uses an animated arc.
 
 ```
 ┌─────────────────────────────────┐
-│ Erase all data?                 │
-├─────────────────────────────────┤
+│          Flash image?           │
 │                                 │
-│       ◯       Hold center       │
-│               for 3 s           │
+│       ◯       All data will     │
+│               be erased!        │
 │                                 │
 └─────────────────────────────────┘
 ```
 
 Download and flash confirmations use the same three-second center hold as
-reboot. The download title includes its size; the flash title warns that data
-will be erased. A fresh press is required, releasing resets the circle, and
+reboot. Download shows Download image and the size beside the circle, without
+a header. Before writing a downloaded or USB image, Flash image? appears above
+the circle and All data will / be erased! beside it. There is no divider or
+Hold center for 3 s text.
+A fresh press is required, releasing resets the circle, and
 BACK/HOME cancels; stick directions do not cancel. Button input errors never start the operation.
 
 #### System Information
 
 Info opens a numbered selection list with the same highlighted rows as Network:
-Device, Memory and Versions. UP/DOWN selects an entry and ENTER opens it. BACK
+Device, Version and Web. UP/DOWN selects an entry and ENTER opens it. BACK
 returns to the same selection; HOME returns to the main grid. ENTER on a detail
-screen refreshes its snapshot.
+screen does nothing. Model/version are read once per Info visit without a
+loading animation.
 
-Memory fits two circular RAM/eMMC indicators into one window, with a percentage,
-unit and used/total figures for each. It has no header, uptime or extra widgets.
-RAM usage is total minus available memory. The eMMC gauge uses the largest
-filesystem's matched total and available space, never the RAM rootfs or physical
-device capacity as its denominator. Model comes from the device tree with board
-detection as a fallback; Versions shows recovery firmware and the app version
-from its release tag.
+Model comes from the device tree with board detection as a fallback. Version
+shows the recovery build's name/version from os-release, not the application
+release. Memory, app version and uptime were removed. Opening Info does not
+collect RAM/eMMC statistics or read filesystem metadata.
 
-Mounted filesystems use current filesystem statistics. For unmounted ext2/3/4,
-the app reads and validates metadata without mounting or replaying the journal;
-`~` marks an estimate. Unsupported, damaged or unavailable filesystems show `--`.
-During a flash the eMMC indicator shows that writing is in progress instead of
-reading a partial filesystem. Missing values use a neutral ring and `--`, not
-0%. Info collection never writes to eMMC.
+Web displays `http://` above the complete current `IP:8124`. With multiple
+addresses, UP/DOWN changes pages and the header shows `1/2`, without arrows.
+Addresses are read again when opening Web, including an active setup AP even
+when NetworkManager does not manage it. This reads configured primary IPv4
+addresses directly from the kernel; it sends no traffic and does not change
+connections. With no address, it shows `No address`. The port is shared with
+the web server through `core/config.py`.
 
 ### Reboot and Power off
 
@@ -438,8 +439,8 @@ Hardware Buttons Navigation:
 ```
 1. Main menu → Navigate to "Info"
 2. ENTER → Open device information
-3. UP/DOWN → Select Device, Memory or Versions
-4. ENTER → Open details; ENTER again refreshes the snapshot
+3. UP/DOWN → Select Device or Version
+4. ENTER → Open details; center and directions have no action inside
 5. BACK → Return to Info; HOME → Return to the main grid
 ```
 
@@ -473,7 +474,7 @@ jrescue-app/
 │   ├── image_writer.py          # Protected streaming writer for every flash path
 │   ├── usb.py                   # USB device detection, mounting, image scan
 │   ├── utils.py                 # curses menus/dialogs, system info, helpers
-│   ├── system_info.py           # Read-only recovery, memory and eMMC facts
+│   ├── system_info.py           # Device model and recovery build version
 │   └── translations.py          # i18n (EN/RU)
 │
 ├── console-application/          # Arrow-key TUI on the (serial) console

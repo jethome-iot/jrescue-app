@@ -110,32 +110,24 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   stronger strokes for the 0.96-inch screen. Settings uses one 15px cog with eight
   teeth and a clear center hole, replacing the old slider icon at the user's request.
   There is no main header or telemetry
-  polling. **Do not restore CPU gauges.** The user approved the new Info list:
-  Device / Memory / Versions, with the same numbered header and highlighted
-  selection as Network. Memory contains two dotted RAM/eMMC rings with percentages
-  and used/total figures in one 128×64 window; no header, uptime or extra widgets.
-  The regular type and positions match the approved `19-system-info.png` /
-  `20-system-info.gif`. Units are shared within each used/total pair; unavailable
-  data uses a neutral track and `--`, never a false 0%. An active writer uses
-  the same neutral indicator with a writing status. Device shows the model;
-  Versions shows recovery and app versions. Enter opens the selected entry or
-  refreshes its details; Back returns to the same Info selection, Home returns
-  to the main grid. Directions are ignored in the single memory window. Uptime
-  is no longer collected by `get_recovery_info()`.
-  `core/system_info.py` reads device tree, os-release, procfs and the actual
-  sysfs `MMC` device (never an SD card, boot0/1 or rpmb). RAM uses MemAvailable,
-  with MemFree only as a fallback. eMMC total is the physical user-area capacity.
-  Free space refers to the largest partition, whose matched total is exposed as
-  `emmc.filesystem_total`; never divide its free space by the physical device's
-  capacity for a filesystem usage gauge. Mounted values use fstatvfs on a
-  pinned, device-verified directory; unmounted ext2/3/4 values read 1024 bytes of
-  superblock counters, validate bounds/64-bit fields/metadata CRC32C, subtract
-  reserved blocks, and display `~` for an estimate. Unsupported, damaged or
-  inaccessible filesystems show `--`, never another partition's or RAM's free
-  space. Reading takes a nonblocking shared lock on the raw eMMC, so an active
-  writer yields a busy status. No mount, fsck, journal replay or storage write
-  is allowed for Info. Values refresh only on entry/Enter, without
-  background telemetry. The main grid and approved fonts remain unchanged.
+  polling. **Do not restore Memory or CPU/RAM/eMMC gauges.** The user removed
+  Memory entirely. Info contains Device / Version / Web with the same numbered
+  header and highlighted selection as Network. Device shows the model; Version
+  shows the recovery build's os-release name/version, with no app version or
+  uptime. Enter opens an entry; inside Device/Version, center and directions do
+  nothing. Back returns to the same selected Info entry, and Home returns to the
+  main grid. Model/version are read once per Info visit without a spinner or a
+  working thread. Web shows `http://` and the complete `IP:8124` on separate rows;
+  UP/DOWN pages through multiple addresses with a numeric counter, without arrows.
+  Center does nothing. Addresses are read fresh on entering Web from the kernel's
+  current primary IPv4 addresses, including the NM-unmanaged setup AP, without
+  network traffic, scans, connection changes or background polling. No configured
+  address shows `No address`. The port comes from shared `config.WEB_SERVER_PORT`,
+  also used by the web server. Do not add a recovery slot entry.
+  `core/system_info.py` reads
+  only device tree and os-release; RAM/eMMC collection and the filesystem
+  metadata reader were removed with Memory. Do not query storage or add
+  background telemetry to Info. The main grid and approved fonts remain unchanged.
   All OLED text uses regular weight, including headers and selected rows.
   Inner screens use bundled Liberation Sans Regular; the keyboard uses bundled
   Liberation Sans Narrow Regular. Main captions keep system DejaVu Sans Condensed.
@@ -209,15 +201,18 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   `05-inner-menus.png` shows the current inner-screen typography.
   `06-wifi-networks.png` shows compact short and wrapped SSIDs in ENG/RUS.
   `11-confirmations.gif` and `12-confirmations.png` show the current download
-  and flash hold confirmations in the same circular style as reboot.
+  and flash hold confirmations with the same three-second physical guard as reboot.
+  Download is headerless with its size; flash has `Flash image?` above the circle
+  and the two-row `All data will / be erased!` warning, without a divider. This warning
+  layout was approved and is implemented for both downloaded and USB images.
   `13-wifi-errors.png` and `14-wifi-errors.gif` show actual Wi-Fi error messages
   with the visible cause and next-step hint.
   `15-download-cancel.png` and `16-download-cancel.gif` show the existing spinner
   while a canceled server download closes, followed by return to the Flash menu.
   `17-network-status.png` and `18-network-status.gif` show Ethernet/Wi-Fi pages
-  with Internet status and the available up/down navigation arrows.
+  with Internet status and numeric page counters, without navigation arrows.
   `19-system-info.png` and `20-system-info.gif` show the approved Info list,
-  combined RAM/eMMC window, model and versions in ENG/RUS.
+  model, recovery build version and current Web URLs in ENG/RUS, with no Memory entry.
   The user approved trying the four-row password-cursor preview; it is now
   implemented. The user rejected an eye button and a separate password overview:
   do not add them. The centered 46px space, `.`/`_` shortcuts, clear symbols and
@@ -230,8 +225,13 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
 - **OLED download, flash, reboot and power off require a fresh continuous three-second
   center hold.** Reboot uses this both in Settings and after flashing. The
   opening press and key autorepeat do not count; release rolls back, and
-  Back/Home cancel; stick directions never cancel. Flash confirmation keeps
-  the erase warning in its title; download confirmation includes the image size. Only an explicit
+  Back/Home cancel; stick directions never cancel. Download confirmation is
+  headerless: an empty title selects two Download image body rows and the size
+  in a third row. Flash uses `plain_title=True` for `Flash image?` above the
+  circle, without a divider, with `All data will / be erased!` alongside it.
+  Russian: `Записать образ?` / `Все данные / удалятся!`. The warning is shared
+  by downloaded and USB images. Do not restore Hold center for 3 s text;
+  the actual fresh continuous hold remains mandatory. Only an explicit
   completed hold starts the action. Lost button state or input errors must
   never start downloading, flashing or rebooting. Canceling flash and input
   failures discard downloaded RAM images before any error dialog.
@@ -256,19 +256,19 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   the user approved them and their menu wiring is implemented. Settings has
   Language, Reboot, Power off, then Display with the current delay. All selection
   lists and Network status screens show a position counter
-  (e.g. `2/4`) at the top right, including `1/1` for a single page; scroll arrows
-  sit immediately to its left when needed. Info's single model/version details
-  use `1/1`; its memory window uses the full display without a header. The 2×2
+  (e.g. `2/4`) at the top right, including `1/1` for a single page. Do not draw
+  scroll/page arrows in any menu header: the counter is sufficient. Info's single model/version details
+  use `1/1`. The 2×2
   main grid is unchanged. The selected
   parent action and current option stay focused when reopening a list. Back/Home
-  never apply a new timeout. Scroll arrows use pixel contours, not font glyphs.
+  never apply a new timeout.
   `poweroff_system()` shares reboot's exact hold guard and requests
   `systemctl --no-block poweroff`; after the hold show `Powering off...` rather
   than generic Wait. The 2×2 main grid, fonts and keyboard remain unchanged.
 - **OLED Network exposes WiFi connect and Network status.** The latter replaces
   Ethernet status: every detected Ethernet and Wi-Fi device has a page, including
-  disconnected devices. UP/DOWN pages without wrapping, arrows show available
-  directions at the top right, ENTER refreshes while preserving the selection,
+  disconnected devices. UP/DOWN pages without wrapping, numeric counters show
+  the current page/total at the top right, ENTER refreshes while preserving the selection,
   Back/Home return safely, and Left is ignored. Pages retain the approved
   two-row design, showing the interface type, IPv4 address and connection/Internet
   state, without MAC or speed. Status viewing never scans or changes networking.
