@@ -232,10 +232,10 @@ class Menu:
         """
         self.display.draw_progress(title, message, percent, detail)
 
-    def hold_to_confirm(self, title, line1, line2, seconds=3.0):
+    def hold_to_confirm(self, title, line1, line2, seconds=3.0, plain_title=False):
         """Require a fresh continuous center hold; releases reset the action."""
         self.idle.activity()
-        self.display.draw_hold_confirmation(title, line1, line2, 0)
+        self.display.draw_hold_confirmation(title, line1, line2, 0, plain_title=plain_title)
         self.input.flush_events()
         armed = KEY_ENTER not in self.input.get_pressed_keys()
         started = None
@@ -276,7 +276,7 @@ class Menu:
                         started = None
                     armed = True
                 percent = progress(now)
-                self.display.draw_hold_confirmation(title, line1, line2, percent)
+                self.display.draw_hold_confirmation(title, line1, line2, percent, plain_title=plain_title)
                 if started is not None and percent >= 100:
                     return True
                 if rollback is not None and percent <= 0:

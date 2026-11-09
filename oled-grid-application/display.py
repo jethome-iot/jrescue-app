@@ -245,9 +245,10 @@ class DisplayManager:
         """Present a device/version snapshot without background polling."""
         self._present(self.renderer.info_page(title, value, detail, navigation=navigation, counter=counter))
 
-    def draw_hold_confirmation(self, title, line1, line2, percent=0):
+    def draw_hold_confirmation(self, title, line1, line2, percent=0, plain_title=False):
         """Show a center-button hold, including its rollback after release."""
-        self._present(self.renderer.hold_confirmation(title, line1, line2, percent))
+        self._present(self.renderer.hold_confirmation(title, line1, line2, percent,
+                                                      plain_title=plain_title))
 
     def draw_splash(self, title, version):
         """Show the app version and detected board using the shared typography."""

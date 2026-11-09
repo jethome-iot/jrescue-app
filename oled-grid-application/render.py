@@ -441,9 +441,27 @@ class OledRenderer:
             self.button(draw, (61, self.BUTTON_TOP, 119, self.BUTTON_BOTTOM), 'OK')
         return image
 
-    def hold_confirmation(self, title, line1, line2, percent=0):
+    def hold_confirmation(self, title, line1, line2, percent=0, plain_title=False):
         """A three-second center hold, with rollback drawn in the same geometry."""
         image, draw = self.canvas()
+        if plain_title:
+            self.label(draw, (2, 1, self.width-3, 17), title, 14)
+            self.ring(draw, 22, 42, 18, max(0, min(100, percent)), width=4)
+            draw.ellipse((19, 39, 25, 45), fill=1)
+            self.label(draw, (47, 23, self.width-2, 39), line1, 14)
+            self.label(draw, (47, 43, self.width-2, 59), line2, 14)
+            return image
+        if not title:
+            self.ring(draw, 22, 32, 20, max(0, min(100, percent)), width=4)
+            draw.ellipse((19, 29, 25, 35), fill=1)
+            lines = str(line1).split('\n', 1)
+            top = 3 if line2 else 13
+            self.label(draw, (47, top, self.width-2, top+16), lines[0], 14)
+            self.label(draw, (47, top+20, self.width-2, top+36),
+                       lines[1] if len(lines) > 1 else '', 14)
+            if line2:
+                self.label(draw, (47, 45, self.width-2, 61), line2, 14)
+            return image
         self.header(draw, title)
         self.ring(draw, 22, 39, 18, max(0, min(100, percent)), width=4)
         draw.ellipse((19, 36, 25, 42), fill=1)

@@ -19,13 +19,26 @@ import config as src_config
 from .reboot import reboot_after_flash
 
 
-def _hold_confirmation(menu, title):
+def _hold_confirmation(menu, action, detail='', title=''):
     """Use reboot's physical guard; let callers clean RAM before error dialogs."""
     try:
-        return menu.hold_to_confirm(title, t('reboot_hold_center'),
-                                    t('reboot_hold_time'), seconds=3.0), None
+        return menu.hold_to_confirm(title, action, detail, seconds=3.0,
+                                    plain_title=bool(title)), None
     except (OSError, RuntimeError):
         return None, t('reboot_input_failed')
+
+
+def image_size(image):
+    """Keep the download size visible without needing a separate header."""
+    try:
+        size = int(image['size']) if image.get('size') is not None else int(image.get('size_mb', 0))*1024**2
+    except (TypeError, ValueError, OverflowError):
+        return '--'
+    if size <= 0:
+        return '--'
+    if size >= 1024**3:
+        return '{:.1f} GiB'.format(size/1024**3)
+    return '{} MiB'.format((size+1024**2-1)//1024**2)
 
 
 def flash_menu(menu):
@@ -95,9 +108,7 @@ def flash_from_http(menu):
 
     image = images[selected]
 
-    size_mb = image.get('size', 0) // (1024 * 1024) if 'size' in image else image.get('size_mb', 0)
-    title = f"{t('flash_confirm_download')} {size_mb}MB"
-    choice, error = _hold_confirmation(menu, title)
+    choice, error = _hold_confirmation(menu, t('flash_download_image'), image_size(image))
     if error:
         return menu.show_message(t('error'), error)
     if choice == -1:
@@ -234,7 +245,9 @@ def perform_flash(menu, image_path, image_name=None, cleanup=None):
     """
     failure = None
     try:
-        choice, failure = _hold_confirmation(menu, t('flash_warning'))
+        warning = t('flash_warning').split('\n', 1)
+        choice, failure = _hold_confirmation(menu, warning[0], warning[1],
+                                              title=t('flash_write_image'))
         if failure is None:
             if choice == -1:
                 return -1
