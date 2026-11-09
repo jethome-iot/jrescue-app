@@ -145,15 +145,9 @@ TRANSLATIONS = {
         # Info screen
         "info_title": "Информация",
         "info_device": "Устройство",
-        "info_memory": "Память",
-        "info_versions": "Версии",
-        "info_app_short": "Прилож.",
-        "info_application": "Приложение",
-        "info_free": "Своб",
-        "info_available": "Доступно",
-        "info_total": "Всего",
         "info_version": "Версия",
-        "info_writing": "Идёт запись",
+        "info_web": "Web",
+        "info_web_no_address": "Нет адреса",
 
         # Common
         "yes": "Да",
@@ -309,15 +303,9 @@ TRANSLATIONS = {
         # Info screen
         "info_title": "Information",
         "info_device": "Device",
-        "info_memory": "Memory",
-        "info_versions": "Versions",
-        "info_app_short": "App",
-        "info_application": "Application",
-        "info_free": "Free",
-        "info_available": "Avail",
-        "info_total": "Total",
         "info_version": "Version",
-        "info_writing": "Flashing",
+        "info_web": "Web",
+        "info_web_no_address": "No address",
 
         # Common
         "yes": "Yes",

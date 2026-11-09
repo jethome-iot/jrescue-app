@@ -237,17 +237,13 @@ class DisplayManager:
         self._present(self.renderer.spinner(title, message, frame))
 
     def draw_network_status(self, title, interface, link, ip, navigation='', counter=''):
-        """Show a large address and status, with optional interface-page arrows."""
+        """Show a large address, status and current interface-page counter."""
         self._present(self.renderer.network_status(title, interface, link, ip,
                                                     navigation=navigation, counter=counter))
 
     def draw_info_page(self, title, value, detail=None, navigation='', counter=''):
         """Present a device/version snapshot without background polling."""
         self._present(self.renderer.info_page(title, value, detail, navigation=navigation, counter=counter))
-
-    def draw_memory_usage(self, gauges):
-        """Present the approved two-ring RAM/eMMC window in one write."""
-        self._present(self.renderer.memory_usage(gauges))
 
     def draw_hold_confirmation(self, title, line1, line2, percent=0):
         """Show a center-button hold, including its rollback after release."""

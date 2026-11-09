@@ -13,7 +13,6 @@ import importlib.util
 
 # Web server settings
 WEB_SERVER_HOST = "0.0.0.0"  # Listen on all interfaces
-WEB_SERVER_PORT = 8124       # HTTP port
 STATIC_DIR = "static"         # Static files directory
 
 # Import settings from core

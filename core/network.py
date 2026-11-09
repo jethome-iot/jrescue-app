@@ -10,7 +10,10 @@ boards without Wi-Fi at all.
 
 import os
 import errno
+import fcntl
+import ipaddress
 import socket
+import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
@@ -19,6 +22,47 @@ from utils import (
     run_command, check_command_exists, print_error, print_success,
     print_info, print_warning, wait_with_spinner
 )
+
+SIOCGIFFLAGS = 0x8913
+SIOCGIFADDR = 0x8915
+IFF_UP = 0x1
+IFF_LOOPBACK = 0x8
+
+
+def get_web_urls() -> List[str]:
+    """Read current primary IPv4 addresses without network traffic or NM calls.
+
+    Query the kernel because the setup AP deliberately leaves NetworkManager's
+    control. Never invent an AP address when it is not actually configured.
+    """
+    urls = []
+    try:
+        interfaces = socket.if_nameindex()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+            for _, name in interfaces:
+                encoded = os.fsencode(name)
+                if not encoded or len(encoded) > 15:
+                    continue
+                request = struct.pack('256s', encoded)
+                try:
+                    flags = struct.unpack_from('H', fcntl.ioctl(connection.fileno(), SIOCGIFFLAGS, request), 16)[0]
+                    if not flags & IFF_UP or flags & IFF_LOOPBACK:
+                        continue
+                    response = fcntl.ioctl(connection.fileno(), SIOCGIFADDR, request)
+                    if struct.unpack_from('H', response, 16)[0] != socket.AF_INET:
+                        continue
+                    address = ipaddress.IPv4Address(response[20:24])
+                    if (address.is_loopback or address.is_unspecified or address.is_multicast
+                            or int(address) == 0xffffffff):
+                        continue
+                    url = 'http://{}:{}'.format(address, config.WEB_SERVER_PORT)
+                    if url not in urls:
+                        urls.append(url)
+                except (OSError, ValueError, struct.error):
+                    continue
+    except OSError:
+        pass
+    return urls
 
 
 def _nmcli_split(line: str) -> List[str]:

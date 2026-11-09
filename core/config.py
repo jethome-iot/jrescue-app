@@ -76,6 +76,9 @@ ETHERNET_INTERFACE = "eth0"
 # Connection timeout in seconds
 NETWORK_TIMEOUT = 10
 
+# Shared with the web frontend so advertised OLED links use its real port.
+WEB_SERVER_PORT = 8124
+
 # Numeric HTTPS endpoints keep interface reachability checks independent of DNS.
 NETWORK_STATUS_TARGETS = ('1.1.1.1', '8.8.8.8')
 NETWORK_STATUS_TIMEOUT = 1.5

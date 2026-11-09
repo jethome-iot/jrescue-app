@@ -121,32 +121,29 @@ class Menu:
         return -1 if self.idle.wait_for_key() == KEY_HOME else None
 
     def show_network_pages(self, pages, initial=0):
-        """Navigate interface snapshots with arrows; return action and page index."""
+        """Navigate interface snapshots with a numeric position counter."""
         def draw(page, navigation, counter):
             self.display.draw_network_status(page['title'], '', page['status'], page['ip'],
                                              navigation=navigation, counter=counter)
         return self._show_pages(pages, draw, initial)
 
-    def show_info_pages(self, pages, initial=0):
-        """Keep the single model/version details screen refreshable with Enter."""
-        def draw(page, navigation, counter):
-            self.display.draw_info_page(page['title'], page['value'], page.get('detail'),
-                                         navigation=navigation, counter=counter)
-        return self._show_pages(pages, draw, initial)
-
-    def show_memory_usage(self, gauges):
-        """Keep both indicators in one window; directions do not change sections."""
-        self.display.draw_memory_usage(gauges)
+    def show_info_page(self, page):
+        """Keep informational details static until Back/Home; center does nothing."""
+        self.display.draw_info_page(page['title'], page['value'], page.get('detail'), counter='1/1')
         while True:
             key = self.idle.wait_for_key()
-            if key == KEY_ENTER:
-                return True
             if key == KEY_BACK:
                 return None
             if key == KEY_HOME:
                 return -1
 
-    def _show_pages(self, pages, draw_page, initial):
+    def show_web_pages(self, pages):
+        """Page through current URLs without reloading them on center presses."""
+        def draw(page, navigation, counter):
+            self.display.draw_info_page(page['title'], page['value'], page.get('detail'), counter=counter)
+        return self._show_pages(pages, draw, 0, refresh=False)[0]
+
+    def _show_pages(self, pages, draw_page, initial, refresh=True):
         """Share nonwrapping paging, refresh and Back/Home across read-only screens."""
         if not pages:
             return None, 0
@@ -161,7 +158,7 @@ class Menu:
                 selected = max(0, selected-1)
             elif key == KEY_DOWN:
                 selected = min(len(pages)-1, selected+1)
-            elif key == KEY_ENTER:
+            elif key == KEY_ENTER and refresh:
                 return True, selected
             elif key == KEY_BACK:
                 return None, selected
