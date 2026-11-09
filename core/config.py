@@ -76,6 +76,10 @@ ETHERNET_INTERFACE = "eth0"
 # Connection timeout in seconds
 NETWORK_TIMEOUT = 10
 
+# Numeric HTTPS endpoints keep interface reachability checks independent of DNS.
+NETWORK_STATUS_TARGETS = ('1.1.1.1', '8.8.8.8')
+NETWORK_STATUS_TIMEOUT = 1.5
+
 AP_SERVICE = "jrescue-ap.service"
 AP_ADDR = "10.42.0.1"
 AP_URL = "http://10.42.0.1"

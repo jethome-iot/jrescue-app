@@ -9,7 +9,10 @@ boards without Wi-Fi at all.
 """
 
 import os
+import errno
+import socket
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 import config
 from utils import (
@@ -76,6 +79,33 @@ def classify_wifi_error(text: str, reason: int = None, returncode: int = None) -
     return 'unknown'
 
 
+def check_interface_internet(device: dict) -> Optional[bool]:
+    """Check public TCP reachability through this device, never another route.
+
+    None means untested (no address/connection, or binding is unavailable).
+    TCP success does not verify DNS, TLS certificates or a captive portal.
+    """
+    bind_option = getattr(socket, 'SO_BINDTODEVICE', None)
+    if not device.get('connected') or not device.get('ip') or bind_option is None:
+        return None
+    for target in config.NETWORK_STATUS_TARGETS:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+                connection.settimeout(config.NETWORK_STATUS_TIMEOUT)
+                connection.setsockopt(socket.SOL_SOCKET, bind_option,
+                                      device['interface'].encode('utf-8')+b'\0')
+                connection.bind((device['ip'], 0))
+                connection.connect((target, 443))
+                return True
+        except OSError as exc:
+            if exc.errno in (errno.EPERM, errno.EACCES, errno.ENODEV,
+                              errno.EADDRNOTAVAIL, errno.ENOPROTOOPT):
+                return None
+        except (ValueError, TypeError):
+            return None
+    return False
+
+
 class NetworkHandler:
     """Base class for network handlers"""
 
@@ -108,6 +138,10 @@ class NetworkHandler:
 
     def get_ethernet_status(self) -> List[dict]:
         """Return wired devices, including links that have no IP address."""
+        raise NotImplementedError
+
+    def get_network_status(self, check_internet=False) -> List[dict]:
+        """Return every Ethernet/Wi-Fi device, including disconnected ones."""
         raise NotImplementedError
 
     def has_wifi(self) -> bool:
@@ -190,17 +224,16 @@ class NetworkManagerHandler(NetworkHandler):
         if self.available:
             self._enumerate_devices()
 
-    def _enumerate_devices(self) -> None:
+    def _enumerate_devices(self) -> bool:
         """Discover Wi-Fi and Ethernet devices instead of assuming wlan0/eth0."""
         ret, out, _ = run_command(
             ['nmcli', '-t', '-f', 'DEVICE,TYPE', 'device', 'status'],
-            check=False
+            check=False, timeout=5
         )
-        if ret != 0:
-            return
-
         self._wifi_devices = []
         self._eth_devices = []
+        if ret != 0:
+            return False
         for line in out.strip().split('\n'):
             if not line:
                 continue
@@ -217,6 +250,7 @@ class NetworkManagerHandler(NetworkHandler):
             self.wifi_interface = self._wifi_devices[0]
         if self._eth_devices:
             self.eth_interface = self._eth_devices[0]
+        return True
 
     def has_wifi(self) -> bool:
         return bool(self._wifi_devices)
@@ -394,6 +428,53 @@ class NetworkManagerHandler(NetworkHandler):
             })
 
         return interfaces
+
+    def get_network_status(self, check_internet=False) -> List[dict]:
+        """Read both device types without scanning, reconnecting or touching AP."""
+        self.last_error = ''
+        if not self.available or not self._enumerate_devices():
+            self.last_error = 'NetworkManager status unavailable'
+            return []
+        devices = []
+        for kind, names in (('ethernet', self._eth_devices), ('wifi', self._wifi_devices)):
+            for name in names:
+                ret, out, _ = run_command(
+                    ['nmcli', '-t', '-f', 'GENERAL.STATE,IP4.ADDRESS', 'device', 'show', name],
+                    check=False, timeout=5)
+                fields = {}
+                if ret == 0:
+                    for line in out.splitlines():
+                        parts = _nmcli_split(line)
+                        if len(parts) >= 2:
+                            fields[parts[0]] = parts[1]
+                try:
+                    state = int(fields.get('GENERAL.STATE', '').split()[0])
+                except (ValueError, IndexError):
+                    state = None
+                carrier = None
+                if kind == 'ethernet':
+                    try:
+                        with open(os.path.join('/sys/class/net', name, 'carrier')) as source:
+                            carrier = source.read().strip() == '1'
+                    except OSError:
+                        pass
+                devices.append({
+                    'interface': name, 'kind': kind, 'state': state,
+                    'connected': state == 100, 'carrier': carrier,
+                    'ip': next((value.split('/')[0] for key, value in fields.items()
+                                if key.startswith('IP4.ADDRESS') and value), None),
+                    'internet': None,
+                })
+        if check_internet and devices:
+            try:
+                with ThreadPoolExecutor(max_workers=min(4, len(devices))) as pool:
+                    results = list(pool.map(check_interface_internet, devices))
+                for device, online in zip(devices, results):
+                    device['internet'] = online
+            except RuntimeError:
+                # Resource exhaustion must not turn unknown into 'no internet'.
+                pass
+        return devices
 
     def get_ethernet_status(self) -> List[dict]:
         """Inspect auto-detected Ethernet interfaces without changing networking."""
