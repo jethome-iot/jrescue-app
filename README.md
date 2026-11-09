@@ -458,7 +458,7 @@ For issues and questions:
 
 ## 📝 Version
 
-**Current version:** v2.0.3
+**Current version:** v2.2.0
 
 ## 🎯 Project Structure
 
