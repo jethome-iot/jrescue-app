@@ -149,8 +149,9 @@ navigation. Present on **JetHub D3 (J310)**; started there by
 All four actions remain visible. UP/DOWN/LEFT/RIGHT selects a card without
 wrapping across edges; ENTER opens it, and HOME resets to Network. Captions are
 regular and fitted to the 128×64 panel, with wider, stronger pixel icons for the
-0.96-inch display. Settings uses a single cog icon. Info shows the firmware,
-without CPU/RAM gauges or polling.
+0.96-inch display. Settings uses a single cog icon. Info has Device, Memory and
+Versions entries. Memory shows RAM/eMMC rings and used/total figures together;
+there is no CPU gauge, uptime or background telemetry polling.
 Inner screens use the selected 02 Liberation Sans style, plain white titles with
 a thin underline, compact text spacing and
 circular feedback. Page changes are immediate, without slide transitions.
@@ -161,7 +162,14 @@ after the user selects a variant.
 
 The OLED and console interfaces start in English without a language prompt.
 The OLED opens its 2×2 main menu directly, without a startup splash or delay.
-Settings contains the English/Russian language choice and the reboot action.
+Settings contains Language, Reboot, Power off and Display, in that order. Display offers
+30 seconds, 1 minute (default), or Never; changes are kept in RAM only. Lists
+focus the current setting, and Back/Home leaves it unchanged.
+Selection lists and Network status pages show their position and total (e.g. `2/4`) at the top
+right, with scroll arrows immediately to the left when more rows are available.
+The OLED goes dark after one minute without button input. The first press wakes
+the display and is consumed until release. Downloads, writes and hold
+confirmations remain visible; finishing an operation starts a fresh idle period.
 Language changes apply immediately and reset on reboot. Flash sources are API
 and USB; there is no separate RAM/downloaded-images menu.
 
@@ -188,17 +196,27 @@ canceled through any frontend: the application waits for the writer to finish.
 ├─────────────────────────────────┤
 │                                 │
 │ ❯ WiFi connect                  │ ← Selected
-│   Ethernet status               │
+│   Network status                │
 │                                 │
 └─────────────────────────────────┘
 ```
 
 Going back is done with the hardware BACK button (HOME jumps to the main menu).
-The two network actions are WiFi connect and Ethernet status. The setup AP is
+The two OLED network actions are WiFi connect and Network status. The setup AP is
 started automatically by the systemd boot decision; there is no Phone AP or
-manual AP start/stop item in the application. Ethernet status reports the wired
-interface, cable link, and IP in a scrollable list even when Wi-Fi is connected.
-MAC and speed are omitted.
+manual AP start/stop item in the application. Network status shows every detected
+Ethernet and Wi-Fi adapter, including disconnected ones, on separate pages.
+UP/DOWN changes the page; the top right shows its number/total and available directions.
+ENTER refreshes the status while keeping the current page; BACK/HOME returns.
+Each page shows the adapter type, IPv4 address and Internet or link state.
+MAC and speed are omitted. Viewing status does not interrupt Wi-Fi or the AP.
+
+Internet status uses bounded TCP/443 checks through each adapter separately,
+binding both the socket's interface and its source IPv4 address. The targets are
+1.1.1.1 and 8.8.8.8, with a 1.5-second timeout per target; adapters are checked in
+parallel. An unavailable interface binding shows unknown status. This checks
+external TCP reachability; DNS, TLS and captive portals are not diagnosed here.
+The indicator does not prevent image downloads.
 Wi-Fi SSID lists use 12px text; wrapped names use a 13px line pitch, keeping
 the lines close together without changing the typography of other menus.
 Other inner menus and two-line messages use a 20px line pitch instead of 25px.
@@ -334,25 +352,34 @@ BACK/HOME cancels; stick directions do not cancel. Button input errors never sta
 
 #### System Information
 
-```
-┌─────────────────────────────────┐
-│ Info                            │
-├─────────────────────────────────┤
-│                                 │
-│      jrescueOS 2026.02          │ ← Firmware name/version
-│                                 │
-│            ┌────┐               │
-│            │ OK │               │
-│            └────┘               │
-└─────────────────────────────────┘
-```
+Info opens a numbered selection list with the same highlighted rows as Network:
+Device, Memory and Versions. UP/DOWN selects an entry and ENTER opens it. BACK
+returns to the same selection; HOME returns to the main grid. ENTER on a detail
+screen refreshes its snapshot.
 
-### Reboot
+Memory fits two circular RAM/eMMC indicators into one window, with a percentage,
+unit and used/total figures for each. It has no header, uptime or extra widgets.
+RAM usage is total minus available memory. The eMMC gauge uses the largest
+filesystem's matched total and available space, never the RAM rootfs or physical
+device capacity as its denominator. Model comes from the device tree with board
+detection as a fallback; Versions shows recovery firmware and the app version
+from its release tag.
+
+Mounted filesystems use current filesystem statistics. For unmounted ext2/3/4,
+the app reads and validates metadata without mounting or replaying the journal;
+`~` marks an estimate. Unsupported, damaged or unavailable filesystems show `--`.
+During a flash the eMMC indicator shows that writing is in progress instead of
+reading a partial filesystem. Missing values use a neutral ring and `--`, not
+0%. Info collection never writes to eMMC.
+
+### Reboot and Power off
 
 Settings and the post-flash screen require a fresh continuous three-second hold
 of the center button. Releasing retracts the circle; Back/Home cancels.
 The opening press and autorepeat do not count. The systemd reboot request is
 nonblocking, so shutdown does not wait on the application's own service.
+Settings' Power off action uses the same guard and a nonblocking systemd poweroff
+request. After the completed hold, it shows `Powering off...`.
 
 ### Features
 
@@ -410,8 +437,10 @@ Hardware Buttons Navigation:
 
 ```
 1. Main menu → Navigate to "Info"
-2. ENTER → Display firmware name and version
-3. ENTER (OK) → Return to main menu
+2. ENTER → Open device information
+3. UP/DOWN → Select Device, Memory or Versions
+4. ENTER → Open details; ENTER again refreshes the snapshot
+5. BACK → Return to Info; HOME → Return to the main grid
 ```
 
 ---
@@ -444,6 +473,7 @@ jrescue-app/
 │   ├── image_writer.py          # Protected streaming writer for every flash path
 │   ├── usb.py                   # USB device detection, mounting, image scan
 │   ├── utils.py                 # curses menus/dialogs, system info, helpers
+│   ├── system_info.py           # Read-only recovery, memory and eMMC facts
 │   └── translations.py          # i18n (EN/RU)
 │
 ├── console-application/          # Arrow-key TUI on the (serial) console
@@ -467,7 +497,7 @@ jrescue-app/
 │   ├── config.py                # OLED-specific configuration
 │   └── screens/                 # network / flash / info / settings / reboot
 │
-├── AGENTS.md                     # Project guide for AI agents (CLAUDE.md imports it)
+├── AGENTS.md                     # Project guide for AI agents
 └── README.md                     # This file
 ```
 

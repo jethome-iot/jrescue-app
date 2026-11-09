@@ -94,7 +94,8 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   must never retry its worker after a curses failure. Button input/display
   failures cancel downloads, while active writes are always joined to completion.
 - **OLED and console start in English.** Language selection and reboot live in
-  Settings, with no startup language screen or separate RAM image source.
+  Settings; OLED also has Display and Power off, with no startup language screen
+  or separate RAM image source.
   OLED opens the 2×2 main menu directly, without a Rescue/version splash or delay.
   OLED's four-item grid is Network / Flash / Info / Settings. Downloads use only the API's
   `images.sdcard` raw `.img`/`.img.xz` entry; burn and RAUC files are excluded.
@@ -109,7 +110,32 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   stronger strokes for the 0.96-inch screen. Settings uses one 15px cog with eight
   teeth and a clear center hole, replacing the old slider icon at the user's request.
   There is no main header or telemetry
-  polling. **Do not restore CPU/RAM gauges:** Info shows the firmware only.
+  polling. **Do not restore CPU gauges.** The user approved the new Info list:
+  Device / Memory / Versions, with the same numbered header and highlighted
+  selection as Network. Memory contains two dotted RAM/eMMC rings with percentages
+  and used/total figures in one 128×64 window; no header, uptime or extra widgets.
+  The regular type and positions match the approved `19-system-info.png` /
+  `20-system-info.gif`. Units are shared within each used/total pair; unavailable
+  data uses a neutral track and `--`, never a false 0%. An active writer uses
+  the same neutral indicator with a writing status. Device shows the model;
+  Versions shows recovery and app versions. Enter opens the selected entry or
+  refreshes its details; Back returns to the same Info selection, Home returns
+  to the main grid. Directions are ignored in the single memory window. Uptime
+  is no longer collected by `get_recovery_info()`.
+  `core/system_info.py` reads device tree, os-release, procfs and the actual
+  sysfs `MMC` device (never an SD card, boot0/1 or rpmb). RAM uses MemAvailable,
+  with MemFree only as a fallback. eMMC total is the physical user-area capacity.
+  Free space refers to the largest partition, whose matched total is exposed as
+  `emmc.filesystem_total`; never divide its free space by the physical device's
+  capacity for a filesystem usage gauge. Mounted values use fstatvfs on a
+  pinned, device-verified directory; unmounted ext2/3/4 values read 1024 bytes of
+  superblock counters, validate bounds/64-bit fields/metadata CRC32C, subtract
+  reserved blocks, and display `~` for an estimate. Unsupported, damaged or
+  inaccessible filesystems show `--`, never another partition's or RAM's free
+  space. Reading takes a nonblocking shared lock on the raw eMMC, so an active
+  writer yields a busy status. No mount, fsck, journal replay or storage write
+  is allowed for Info. Values refresh only on entry/Enter, without
+  background telemetry. The main grid and approved fonts remain unchanged.
   All OLED text uses regular weight, including headers and selected rows.
   Inner screens use bundled Liberation Sans Regular; the keyboard uses bundled
   Liberation Sans Narrow Regular. Main captions keep system DejaVu Sans Condensed.
@@ -188,6 +214,10 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   with the visible cause and next-step hint.
   `15-download-cancel.png` and `16-download-cancel.gif` show the existing spinner
   while a canceled server download closes, followed by return to the Flash menu.
+  `17-network-status.png` and `18-network-status.gif` show Ethernet/Wi-Fi pages
+  with Internet status and the available up/down navigation arrows.
+  `19-system-info.png` and `20-system-info.gif` show the approved Info list,
+  combined RAM/eMMC window, model and versions in ENG/RUS.
   The user approved trying the four-row password-cursor preview; it is now
   implemented. The user rejected an eye button and a separate password overview:
   do not add them. The centered 46px space, `.`/`_` shortcuts, clear symbols and
@@ -197,7 +227,7 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   are implemented. Keep only the current design in the preview folder.
   Font binaries and their individual licenses live in `oled-grid-application/fonts/`
   and ship with app-only updates; do not depend on a board-side font installation.
-- **OLED download, flash and reboot require a fresh continuous three-second
+- **OLED download, flash, reboot and power off require a fresh continuous three-second
   center hold.** Reboot uses this both in Settings and after flashing. The
   opening press and key autorepeat do not count; release rolls back, and
   Back/Home cancel; stick directions never cancel. Flash confirmation keeps
@@ -211,7 +241,45 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   rather than the generic `Wait...`; Settings and post-flash reboot share it.
   Blocking network/download/flash operations still draw only on the UI thread
   and use one joined worker through `Menu.run_working` / `run_progress`.
-- **Network menus expose WiFi connect and Ethernet status only.** The setup AP
+- **OLED inactivity defaults to one minute.** `idle.py: IdleScreen` runs on the
+  UI thread, wrapping every menu/password wait without extending caller deadlines.
+  Drawing and caret blinking do not reset inactivity. The wake press, repeats
+  and simultaneous presses are consumed until all buttons are released; only a
+  fresh press can navigate or submit. Button-state and wake failures propagate.
+  Busy operations and hold confirmations stay visible and reset the idle timer
+  on exit, including error exits. `DisplayManager.sleep()` uses `FBIOBLANK`
+  powerdown, falling back to a zero-filled framebuffer of the detected native
+  size; frames drawn while asleep are retained but not written. Waking restores
+  the latest logical frame without changing framebuffer format/stride handling.
+  Runtime timeout choices are 30/60/0 seconds (0 = never), with 60 on every start.
+  Display and Power off menu previews are `21-settings.png` / `22-settings.gif`;
+  the user approved them and their menu wiring is implemented. Settings has
+  Language, Reboot, Power off, then Display with the current delay. All selection
+  lists and Network status screens show a position counter
+  (e.g. `2/4`) at the top right, including `1/1` for a single page; scroll arrows
+  sit immediately to its left when needed. Info's single model/version details
+  use `1/1`; its memory window uses the full display without a header. The 2×2
+  main grid is unchanged. The selected
+  parent action and current option stay focused when reopening a list. Back/Home
+  never apply a new timeout. Scroll arrows use pixel contours, not font glyphs.
+  `poweroff_system()` shares reboot's exact hold guard and requests
+  `systemctl --no-block poweroff`; after the hold show `Powering off...` rather
+  than generic Wait. The 2×2 main grid, fonts and keyboard remain unchanged.
+- **OLED Network exposes WiFi connect and Network status.** The latter replaces
+  Ethernet status: every detected Ethernet and Wi-Fi device has a page, including
+  disconnected devices. UP/DOWN pages without wrapping, arrows show available
+  directions at the top right, ENTER refreshes while preserving the selection,
+  Back/Home return safely, and Left is ignored. Pages retain the approved
+  two-row design, showing the interface type, IPv4 address and connection/Internet
+  state, without MAC or speed. Status viewing never scans or changes networking.
+  `get_network_status(check_internet=True)` checks connected, addressed devices
+  independently, using TCP/443 to `NETWORK_STATUS_TARGETS` with a 1.5s timeout
+  per target and sockets bound to both the interface (`SO_BINDTODEVICE`) and its
+  IPv4 address. Devices are checked in parallel (up to four workers). Failure to
+  bind or insufficient permissions means unknown, never an unbound fallback.
+  This is external TCP reachability, not a DNS/TLS/captive-portal test, and it
+  does not gate downloads. Core's default snapshot makes no external probes.
+  The setup AP
   is raised by systemd boot scripts; there is no Phone AP / manual AP action.
   Direct Wi-Fi connect still releases the single radio from an active AP.
   Wi-Fi failures use `NetworkHandler.last_error_code` (NM numeric device reason
@@ -220,7 +288,7 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   body rows, never behind an SSID that could push the cause off-screen. Only
   credential/auth failures reopen the password editor; other failures return
   to the network menu. Connection commands have bounded timeouts.
-  Ethernet status screens show interface, cable link and IP; omit MAC and speed.
+  The console's existing Ethernet status remains available separately.
 - **The console UI is curses-only, including waits and progress.** Menus/dialogs:
   `show_menu`, `show_horizontal_menu`, `input_dialog`, `confirm_action`; screens:
   `show_text_screen` (scrollable report), `show_wait_screen` (spinner around a
