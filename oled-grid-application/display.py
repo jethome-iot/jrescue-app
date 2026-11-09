@@ -19,6 +19,9 @@ from render import OledRenderer
 # Linux framebuffer ioctls (include/uapi/linux/fb.h)
 FBIOGET_VSCREENINFO = 0x4600
 FBIOGET_FSCREENINFO = 0x4602
+FBIOBLANK = 0x4611
+FB_BLANK_UNBLANK = 0
+FB_BLANK_POWERDOWN = 4
 
 
 class DisplayManager:
@@ -81,6 +84,8 @@ class DisplayManager:
                                           config.FONT_PATHS, config.FONT_BOLD_PATHS,
                                           config.MAIN_FONT_PATHS, config.KEYBOARD_FONT_PATHS)
             self._last_frame = None
+            self._sleeping = False
+            self._hardware_blanked = False
 
             # Clear display on init
             self.clear()
@@ -105,6 +110,8 @@ class DisplayManager:
 
     def _update_display(self):
         """Write the PIL image to the framebuffer in its native pixel format."""
+        if self._sleeping:
+            return
         try:
             logical = self.image.tobytes()
             if logical == self._last_frame:
@@ -151,6 +158,31 @@ class DisplayManager:
     def clear(self):
         """Clear the display"""
         self.draw.rectangle((0, 0, self.width, self.height), fill=0)
+        self._update_display()
+
+    def sleep(self):
+        """Ask the driver to blank; fall back to black pixels if unsupported."""
+        if self._sleeping:
+            return
+        try:
+            fcntl.ioctl(self.fb_fd, FBIOBLANK, FB_BLANK_POWERDOWN)
+            self._hardware_blanked = True
+        except OSError:
+            self.fb_mmap.seek(0)
+            self.fb_mmap.write(bytes(self.fb_size))
+            self.fb_mmap.flush()
+            self._hardware_blanked = False
+        self._sleeping = True
+
+    def wake(self):
+        """Restore the latest logical frame; never navigate on the wake button."""
+        if not self._sleeping:
+            return
+        if self._hardware_blanked:
+            fcntl.ioctl(self.fb_fd, FBIOBLANK, FB_BLANK_UNBLANK)
+        self._sleeping = False
+        self._hardware_blanked = False
+        self._last_frame = None
         self._update_display()
 
     def _present(self, image):
@@ -204,9 +236,18 @@ class DisplayManager:
         """Show a circular activity indicator."""
         self._present(self.renderer.spinner(title, message, frame))
 
-    def draw_network_status(self, title, interface, link, ip):
-        """Show interface, link and a large address together on one page."""
-        self._present(self.renderer.network_status(title, interface, link, ip))
+    def draw_network_status(self, title, interface, link, ip, navigation='', counter=''):
+        """Show a large address and status, with optional interface-page arrows."""
+        self._present(self.renderer.network_status(title, interface, link, ip,
+                                                    navigation=navigation, counter=counter))
+
+    def draw_info_page(self, title, value, detail=None, navigation='', counter=''):
+        """Present a device/version snapshot without background polling."""
+        self._present(self.renderer.info_page(title, value, detail, navigation=navigation, counter=counter))
+
+    def draw_memory_usage(self, gauges):
+        """Present the approved two-ring RAM/eMMC window in one write."""
+        self._present(self.renderer.memory_usage(gauges))
 
     def draw_hold_confirmation(self, title, line1, line2, percent=0):
         """Show a center-button hold, including its rollback after release."""

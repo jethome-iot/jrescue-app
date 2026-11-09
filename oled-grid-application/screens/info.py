@@ -1,66 +1,75 @@
-"""
-System Information Screen for OLED
-"""
+"""Selected Info entries and one-screen RAM/eMMC usage for OLED."""
 
 import sys
 import os
 
-# Add parent dir to path for language import
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from language import t
 
-# Add core/ to path to reuse modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
+from system_info import get_recovery_info
 
-from utils import get_system_info
+
+def info_items():
+    """Use the same numbered, highlighted selection list as Network."""
+    return [t('info_device'), t('info_memory'), t('info_versions')]
 
 
-def _read_os_release() -> dict:
-    """
-    Read /etc/os-release into a dict.
-    Prefer PRETTY_NAME for display.
-    """
-    data = {}
-    try:
-        with open("/etc/os-release", "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                data[k] = v.strip().strip('"')
-    except Exception:
-        pass
-    return data
+def info_details(info, selected):
+    """Keep the model and both versions separate from the memory indicators."""
+    if selected == 0:
+        model = info.get('model') or '--'
+        if model.startswith('JetHome '):
+            model = model[len('JetHome '):]
+        return {'title': t('info_device'), 'value': model}
+    if selected == 2:
+        return {'title': t('info_versions'), 'value': info.get('firmware') or '--',
+                'detail': t('info_app_short')+': '+str(info.get('app_version') or '--')}
+    raise ValueError('Info section has no text details')
+
+
+def _memory_gauge(name, total, available, approximate=False, busy=False):
+    """Use matched counters; unavailable data must not look like zero usage."""
+    gauge = {'name': name, 'percent': None, 'unit': '',
+             'amounts': t('info_writing') if busy else '--'}
+    if (busy or type(total) is not int or type(available) is not int
+            or total <= 0 or not 0 <= available <= total):
+        return gauge
+    used = total-available
+    divisor, unit = next((scale, unit) for scale, unit in
+                         ((1024**4, 'TiB'), (1024**3, 'GiB'), (1024**2, 'MiB'))
+                         if total >= scale or unit == 'MiB')
+    precision = 0 if total/divisor >= 100 else 1
+    pair = '{:.{p}f}/{:.{p}f}'.format(used/divisor, total/divisor, p=precision)
+    gauge.update(percent=100*used/total, unit=unit, amounts=('~' if approximate else '')+pair)
+    return gauge
+
+
+def memory_usage(info):
+    """Pair filesystem usage with its own total, never the whole eMMC capacity."""
+    emmc = info.get('emmc') or {}
+    return [_memory_gauge('RAM', info.get('ram_total'), info.get('ram_available')),
+            _memory_gauge('eMMC', emmc.get('filesystem_total'), emmc.get('free'),
+                          emmc.get('approximate', False), emmc.get('busy', False))]
 
 
 def show_system_info(menu):
-    """
-    Display system information - simplified version
-    Shows only firmware version and board name
-
-    Args:
-        menu: Menu instance
-
-    Returns:
-        -1 if HOME pressed, None otherwise
-    """
-    # Get system info
-    info = get_system_info()
-
-    # Prefer os-release (patched in post-build) for product name/version
-    osr = _read_os_release()
-    pretty = osr.get("PRETTY_NAME")
-    if not pretty:
-        name = osr.get("NAME", "jrescue")
-        ver = osr.get("VERSION_ID", "")
-        pretty = f"{name} {ver}".strip()
-
-    # Fallback: show kernel version if os-release is missing
-    if not pretty:
-        pretty = info.get("kernel", "Unknown")[:18]
-
-    # The renderer wraps by pixel width, allowing two readable lines.
-    result = menu.show_message(t("info_title"), pretty, wait_for_key=True)
-    return result  # Returns -1 if HOME pressed, None otherwise
+    """Open highlighted entries; refresh details on Enter and preserve Back/Home."""
+    selected = 0
+    while True:
+        choice = menu.select_from_list(t('info_title'), info_items(), show_index=False,
+                                       show_counter=True, initial_index=selected)
+        if choice is None or choice == -1:
+            return choice
+        selected = choice
+        while True:
+            info = menu.run_working(t('info_title'), t('wait'), get_recovery_info)
+            if selected == 1:
+                action = menu.show_memory_usage(memory_usage(info))
+            else:
+                action, _ = menu.show_info_pages([info_details(info, selected)])
+            if action == -1:
+                return -1
+            if action is not True:
+                break
 

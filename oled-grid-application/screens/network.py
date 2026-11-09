@@ -48,12 +48,12 @@ def network_menu(menu):
     Returns:
         -1 if HOME pressed, None otherwise
     """
-    items = [t("net_wifi"), t("net_ethernet")]
+    items = [t("net_wifi"), t("net_status")]
 
     while True:
         # Use select_from_list instead of show_menu for scrolling support and consistency
         choice = menu.select_from_list(t("net_title"), items, show_index=False,
-                                       show_counter=False)
+                                       show_counter=True)
 
         if choice is None:
             return None  # Back
@@ -64,7 +64,7 @@ def network_menu(menu):
             if result == -1:
                 return -1  # Propagate HOME to main menu
         elif choice == 1:
-            result = ethernet_status(menu)
+            result = network_status(menu)
             if result == -1:
                 return -1
 
@@ -161,25 +161,37 @@ def wifi_setup(menu):
             return _wifi_error(menu, handler)
 
 
-def ethernet_status(menu):
-    """Show wired link/IP details, independently of active Wi-Fi or the AP."""
-    handler = get_network_handler()
-    if not handler:
-        return menu.show_message(t('error'), "NetworkManager\nnot found")
-    devices = menu.run_working(t('net_ethernet'), t('wait'), handler.get_ethernet_status)
-    if not devices:
-        return menu.show_message(t('net_ethernet'), t('eth_missing'))
-    if len(devices) > 1:
-        choice = menu.select_from_list(t('net_ethernet'),
-                                       [device['interface'] for device in devices],
-                                       show_index=False, show_counter=False)
-        if choice is None or choice == -1:
-            return choice
-        device = devices[choice]
+def network_status_page(device):
+    """Describe one interface using the existing two-row status layout."""
+    title = 'Ethernet' if device['kind'] == 'ethernet' else 'WiFi'
+    if device.get('state') is None or device['state'] in (10, 20):
+        key = 'net_unavailable'
+    elif device['kind'] == 'ethernet' and device.get('carrier') is False:
+        key = 'net_no_cable'
+    elif device.get('connected') and device.get('ip'):
+        key = ('net_internet_yes' if device.get('internet') is True else
+               'net_internet_no' if device.get('internet') is False else 'net_internet_unknown')
+    elif device.get('carrier') is True or device['state'] in (70, 80, 90, 100):
+        key = 'net_no_ip'
     else:
-        device = devices[0]
-    carrier = device['carrier']
-    link = t('eth_up') if carrier is True else t('eth_down') if carrier is False else '--'
-    result = menu.show_network_status(t('net_ethernet'), device['interface'],
-                                      t('eth_link') + ': ' + link, device['ip'] or '--')
-    return -1 if result == -1 else None
+        key = 'net_disconnected'
+    return {'title': title, 'interface': device['interface'],
+            'status': t(key), 'ip': device.get('ip') or '--'}
+
+
+def network_status(menu):
+    """Page through all detected interfaces; Enter refreshes the snapshot."""
+    handler = menu.run_working(t('net_status'), t('wait'), get_network_handler)
+    if not handler:
+        return menu.show_message(t('net_status'), t('net_unavailable'))
+    selected = 0
+    while True:
+        devices = menu.run_working(t('net_status'), t('wait'), handler.get_network_status,
+                                   check_internet=True)
+        if not devices:
+            return menu.show_message(t('net_status'), t('net_unavailable') if handler.last_error
+                                     else t('net_no_interfaces'))
+        pages = [network_status_page(device) for device in devices]
+        action, selected = menu.show_network_pages(pages, initial=selected)
+        if action is not True:
+            return action

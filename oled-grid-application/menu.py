@@ -7,6 +7,7 @@ import threading
 import time
 import config
 from language import t
+from idle import IdleScreen
 
 
 class Menu:
@@ -22,6 +23,7 @@ class Menu:
         """
         self.display = display
         self.input = input_handler
+        self.idle = IdleScreen(display, input_handler)
         self.current_index = 0
         self.menu_stack = []  # For navigation history
         self._main_selection = 0
@@ -43,7 +45,7 @@ class Menu:
 
         while True:
             self.display.draw_menu(title, items, self.current_index, compact=compact, right=right)
-            key = self.input.wait_for_key()
+            key = self.idle.wait_for_key()
 
             if key == KEY_UP:
                 # Don't go above first item
@@ -71,7 +73,7 @@ class Menu:
         while True:
             selected = self._main_selection
             self.display.draw_main_menu(items, selected)
-            key = self.input.wait_for_key()
+            key = self.idle.wait_for_key()
             if key == KEY_UP and selected >= 2:
                 self._main_selection -= 2
             elif key == KEY_DOWN and selected+2 < len(items):
@@ -108,15 +110,63 @@ class Menu:
         else:
             self.display.draw_message(title, message, wait_for_key=wait_for_key)
         if wait_for_key:
-            key = self.input.wait_for_key()
+            key = self.idle.wait_for_key()
             if key == KEY_HOME:
                 return -1
         return None
 
     def show_network_status(self, title, interface, link, ip):
         """Display a compact wired status page until acknowledgement or Home."""
-        self.display.draw_network_status(title, interface, link, ip)
-        return -1 if self.input.wait_for_key() == KEY_HOME else None
+        self.display.draw_network_status(title, interface, link, ip, counter='1/1')
+        return -1 if self.idle.wait_for_key() == KEY_HOME else None
+
+    def show_network_pages(self, pages, initial=0):
+        """Navigate interface snapshots with arrows; return action and page index."""
+        def draw(page, navigation, counter):
+            self.display.draw_network_status(page['title'], '', page['status'], page['ip'],
+                                             navigation=navigation, counter=counter)
+        return self._show_pages(pages, draw, initial)
+
+    def show_info_pages(self, pages, initial=0):
+        """Keep the single model/version details screen refreshable with Enter."""
+        def draw(page, navigation, counter):
+            self.display.draw_info_page(page['title'], page['value'], page.get('detail'),
+                                         navigation=navigation, counter=counter)
+        return self._show_pages(pages, draw, initial)
+
+    def show_memory_usage(self, gauges):
+        """Keep both indicators in one window; directions do not change sections."""
+        self.display.draw_memory_usage(gauges)
+        while True:
+            key = self.idle.wait_for_key()
+            if key == KEY_ENTER:
+                return True
+            if key == KEY_BACK:
+                return None
+            if key == KEY_HOME:
+                return -1
+
+    def _show_pages(self, pages, draw_page, initial):
+        """Share nonwrapping paging, refresh and Back/Home across read-only screens."""
+        if not pages:
+            return None, 0
+        selected = min(max(initial, 0), len(pages)-1)
+        while True:
+            page = pages[selected]
+            navigation = ('both' if selected and selected+1 < len(pages) else
+                          'up' if selected else 'down' if len(pages) > 1 else '')
+            draw_page(page, navigation, '{}/{}'.format(selected+1, len(pages)))
+            key = self.idle.wait_for_key()
+            if key == KEY_UP:
+                selected = max(0, selected-1)
+            elif key == KEY_DOWN:
+                selected = min(len(pages)-1, selected+1)
+            elif key == KEY_ENTER:
+                return True, selected
+            elif key == KEY_BACK:
+                return None, selected
+            elif key == KEY_HOME:
+                return -1, selected
 
     def confirm(self, title, message=None):
         """
@@ -159,7 +209,7 @@ class Menu:
         self.display.draw_horizontal_choice(title, option1, option2, selected)
 
         while True:
-            key = self.input.wait_for_key()
+            key = self.idle.wait_for_key()
 
             if key == KEY_LEFT:
                 selected = 0
@@ -187,6 +237,7 @@ class Menu:
 
     def hold_to_confirm(self, title, line1, line2, seconds=3.0):
         """Require a fresh continuous center hold; releases reset the action."""
+        self.idle.activity()
         self.display.draw_hold_confirmation(title, line1, line2, 0)
         self.input.flush_events()
         armed = KEY_ENTER not in self.input.get_pressed_keys()
@@ -235,6 +286,7 @@ class Menu:
                     rollback = None
         finally:
             self.input.flush_events()
+            self.idle.activity()
 
     def show_working(self, title, message, frame=0):
         """
@@ -267,6 +319,7 @@ class Menu:
 
     def _run_operation(self, title, message, worker, use_progress, cancel_event=None):
         """Keep the operation alive even if drawing fails; never start it twice."""
+        self.idle.activity()
         done = threading.Event()
         lock = threading.Lock()
         state = {'percent': None, 'lines': (), 'result': None, 'error': None}
@@ -319,6 +372,7 @@ class Menu:
         finally:
             thread.join()
             self.input.flush_events()
+            self.idle.activity()
         if state['error'] is not None:
             raise state['error']
         if cancel_event is not None:
@@ -337,7 +391,7 @@ class Menu:
             self.display.draw_keyboard(state.value, state.rows, state.row, state.col,
                                        t('keyboard_password'), state.shift, state=state,
                                        cursor_visible=int(phase) % 2 == 0)
-            key = self.input.wait_for_key(timeout=max(0.01, (1-phase % 1)*0.5))
+            key = self.idle.wait_for_key(timeout=max(0.01, (1-phase % 1)*0.5))
             if key is None:
                 continue
             blink_started = time.monotonic()
@@ -352,7 +406,7 @@ class Menu:
                 state.move(directions[key])
 
     def select_from_list(self, title, items, show_index=True, show_counter=True, icons=None,
-                         compact=False):
+                         compact=False, initial_index=0):
         """
         Select from a list with scrolling (title always on top)
 
@@ -362,6 +416,7 @@ class Menu:
             show_index: If True, show index numbers (default: True)
             show_counter: If True, show "1/10" counter in title (default: True)
             compact: Use smaller names and closer wrapped lines for Wi-Fi SSIDs
+            initial_index: Focus the current setting or previously selected action
 
         Returns:
             Selected index or None if cancelled
@@ -371,7 +426,7 @@ class Menu:
             return None
 
         # Scrollable list with fixed title
-        selected = 0
+        selected = min(max(0, initial_index), len(items)-1)
         scroll_offset = 0
 
         item_heights = [self.display.list_item_height(item, show_index,
@@ -417,7 +472,7 @@ class Menu:
                                        icons[visible_start:visible_end] if icons else None, compact)
 
             # Wait for input
-            key = self.input.wait_for_key()
+            key = self.idle.wait_for_key()
 
             if key == KEY_UP:
                 if selected > 0:

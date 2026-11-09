@@ -43,7 +43,7 @@ def flash_menu(menu):
     while True:
         # Use select_from_list instead of show_menu for scrolling support
         choice = menu.select_from_list(t("flash_title"), items, show_index=False,
-                                       show_counter=False)
+                                       show_counter=True)
 
         if choice is None:
             return None  # Back

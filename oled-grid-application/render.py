@@ -169,11 +169,12 @@ class OledRenderer:
             lines.append(current.rstrip())
         return lines or ['']
 
-    def header(self, draw, title, right='', page=None):
+    def header(self, draw, title, right='', page=None, right_width=0):
         """Separate a plain white title from the body with a one-pixel rule."""
         draw.rectangle((0, 0, self.width-1, 16), fill=0)
-        reserved = 27 if page is not None else (
-            int(self.text_width(right, self.font(12)))+7 if right else 0)
+        text_reserved = int(self.text_width(right, self.font(12)))+7 if right else 0
+        reserved = 27 if page is not None else text_reserved
+        reserved = max(reserved, right_width)
         self.label(draw, (1, 0, self.width-2-reserved, 12), title, 14,
                    minimum=12, left=True)
         if page is not None:
@@ -181,7 +182,7 @@ class OledRenderer:
                 x = self.width-25+index*6
                 draw.rectangle((x, 5, x+2, 7), outline=1, fill=1 if index == page else 0)
         elif right:
-            self.label(draw, (self.width-reserved, 0, self.width-2, 12), right, 12, minimum=12)
+            self.label(draw, (self.width-text_reserved, 0, self.width-2, 12), right, 12, minimum=12)
         draw.line((0, 15, self.width-1, 15), fill=1)
 
     @staticmethod
@@ -297,9 +298,16 @@ class OledRenderer:
         while start < max(0, selected) and sum(self.list_item_height(item)
                 for item in items[start:selected+1]) > self.height-self.BODY_TOP:
             start += 1
-        image = self.list_screen(title, items[start:], selected-start, selected+1,
-                                 len(items), start+1, start > 0,
-                                 show_index=False, show_counter=False)
+        end, used = start, 0
+        while end < len(items):
+            height = self.list_item_height(items[end])
+            if used+height > self.height-self.BODY_TOP:
+                break
+            used += height
+            end += 1
+        image = self.list_screen(title, items[start:end], selected-start, selected+1,
+                                 len(items), start+1, start > 0, end < len(items),
+                                 show_index=False, show_counter=True)
         if right:
             self.header(ImageDraw.Draw(image), title, right)
         return image
@@ -309,10 +317,10 @@ class OledRenderer:
                     show_index=True, show_counter=True, icons=None, compact=False):
         """Use the same compact two-row layout for actions and wrapped names."""
         image, draw = self.canvas()
-        right = '{}/{}'.format(current_num, total_num) if show_counter else (
-            '↕' if can_scroll_up and can_scroll_down else
-            '↑' if can_scroll_up else '↓' if can_scroll_down else '')
-        self.header(draw, title, right)
+        navigation = ('both' if can_scroll_up and can_scroll_down else
+                      'up' if can_scroll_up else 'down' if can_scroll_down else '')
+        counter = '{}/{}'.format(current_num, total_num) if show_counter else ''
+        self.page_header(draw, title, navigation, counter)
         used = 0
         for index, item in enumerate(items):
             name = icons[index] if icons else None
@@ -363,14 +371,51 @@ class OledRenderer:
                           lines[1] if len(lines) > 1 else '', 14, False)
         return image
 
-    def network_status(self, title, interface, link, ip):
+    def page_header(self, draw, title, navigation='', right=''):
+        """Reserve separate space for a right-aligned counter and pixel arrows."""
+        counter_width = int(self.text_width(right, self.font(12)))+7 if right else 0
+        self.header(draw, title, right, right_width=counter_width+(12 if navigation else 0))
+        if navigation:
+            x = self.width-counter_width-7
+            draw.line((x, 3, x, 11), fill=1)
+            if navigation in ('up', 'both'):
+                draw.line((x-3, 6, x, 3, x+3, 6), fill=1)
+            if navigation in ('down', 'both'):
+                draw.line((x-3, 8, x, 11, x+3, 8), fill=1)
+
+    def info_page(self, title, value, detail=None, navigation='', counter=''):
+        """Keep numeric labels on separate rows and wrap long product names."""
+        image, draw = self.canvas()
+        self.page_header(draw, title, navigation, counter)
+        if detail is None:
+            lines = self.wrap(value, self.width-8)
+            value, detail = lines[0], lines[1] if len(lines) > 1 else ''
+            if len(lines) > 2:
+                detail = self.clip(detail+'…', self.width-8)
+        self.two_rows(draw, 4, self.width-5, value, detail, 14, False)
+        return image
+
+    def network_status(self, title, interface, link, ip, navigation='', counter=''):
         """Show the address prominently, with no MAC address or link speed."""
         image, draw = self.canvas()
-        self.header(draw, title, interface)
+        self.page_header(draw, title, navigation, counter or interface)
         self.label(draw, (2, 20, self.width-3, 37), ip, 18, minimum=13)
         for x in range(10, self.width-10, 2):
             draw.point((x, 39), fill=1)
         self.label(draw, (4, self.BOTTOM_ROW[0], self.width-5, self.BOTTOM_ROW[1]), link, 15)
+        return image
+
+    def memory_usage(self, gauges):
+        """Fit the approved dotted rings, regular figures and units into 128×64."""
+        image, draw = self.canvas()
+        for cx, gauge in zip((self.width//4-1, 3*self.width//4), gauges):
+            percent = gauge['percent']
+            self.ring(draw, cx, 20, 20, percent, width=4)
+            value = '--' if percent is None else '{:.0f}%'.format(percent)
+            self.label(draw, (cx-16, 10, cx+16, 30), value, 15)
+            self.label(draw, (cx-31, 42, cx+31, 50),
+                       (gauge['name']+' '+gauge['unit']).rstrip(), 12, minimum=11)
+            self.label(draw, (cx-31, 52, cx+31, 63), gauge['amounts'], 14, minimum=11)
         return image
 
     def progress(self, title, message, percent, detail=''):
