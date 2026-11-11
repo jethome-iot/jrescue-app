@@ -395,6 +395,58 @@ class OledRenderer:
         self.label(draw, (4, self.BOTTOM_ROW[0], self.width-5, self.BOTTOM_ROW[1]), link, 15)
         return image
 
+    def _network_field(self, row, ssid):
+        """Measure exactly the value window used for drawing and scrolling."""
+        is_ssid = row == 'SSID'
+        if not is_ssid and not row.startswith('IP: '):
+            return None
+        face = self.font(14)
+        prefix = self._glyphs('SSID:' if is_ssid else 'IP:', face)
+        glyph = self._glyphs((ssid or '--') if is_ssid else row[4:], face)
+        value_x = 2+prefix.width+4
+        width = self.width-2-value_x
+        marked = not is_ssid and glyph.width > width
+        if marked:
+            value_x += 6
+            width -= 12
+        return prefix, glyph, value_x, width, marked
+
+    def network_scroll_limits(self, rows, ssid=None):
+        """Return per-row pixel limits; short values and status labels stay still."""
+        limits = []
+        for row in rows:
+            field = self._network_field(row, ssid)
+            limits.append(max(0, field[1].width-field[3]) if field else 0)
+        return limits
+
+    def network_fields(self, title, rows, counter='', ssid=None, offsets=None):
+        """Draw the approved labeled Ethernet/WiFi layout with fixed captions."""
+        image, draw = self.canvas()
+        self.page_header(draw, title, right=counter)
+        boxes = ((2, 18, self.width-3, 31), (2, 33, self.width-3, 46),
+                 (2, 48, self.width-3, 61)) if len(rows) == 3 else (
+                     (2, 21, self.width-3, 37), (2, 41, self.width-3, 57))
+        offsets = offsets or [0]*len(rows)
+        for index, (row, box) in enumerate(zip(rows, boxes)):
+            field = self._network_field(row, ssid)
+            if field is None:
+                self.label(draw, box, row, 14, minimum=13, left=True)
+                continue
+            prefix, glyph, value_x, width, marked = field
+            x0, y0, x1, y1 = box
+            draw.bitmap((x0, y0+(y1-y0+1-prefix.height)//2), prefix, fill=1)
+            maximum = max(0, glyph.width-width)
+            offset = min(max(0, offsets[index]), maximum)
+            viewport = glyph.crop((offset, 0, min(glyph.width, offset+width), glyph.height))
+            draw.bitmap((value_x, y0+(y1-y0+1-glyph.height)//2), viewport, fill=1)
+            if marked:
+                cy = (y0+y1)//2
+                if offset:
+                    draw.line((value_x-3, cy-3, value_x-6, cy, value_x-3, cy+3), fill=1)
+                if offset < maximum:
+                    draw.line((x1-3, cy-3, x1, cy, x1-3, cy+3), fill=1)
+        return image
+
     def progress(self, title, message, percent, detail=''):
         """A single large measured value and two compact detail lines."""
         image, draw = self.canvas()
@@ -448,8 +500,14 @@ class OledRenderer:
             self.label(draw, (2, 1, self.width-3, 17), title, 14)
             self.ring(draw, 22, 42, 18, max(0, min(100, percent)), width=4)
             draw.ellipse((19, 39, 25, 45), fill=1)
-            self.label(draw, (47, 23, self.width-2, 39), line1, 14)
-            self.label(draw, (47, 43, self.width-2, 59), line2, 14)
+            lines = str(line1).split('\n')+[str(line2)]
+            if len(lines) == 3:
+                for index, text in enumerate(lines):
+                    top = 19+15*index
+                    self.label(draw, (47, top, self.width-2, top+13), text, 14, minimum=14)
+            else:
+                self.label(draw, (47, 23, self.width-2, 39), line1, 14)
+                self.label(draw, (47, 43, self.width-2, 59), line2, 14)
             return image
         if not title:
             self.ring(draw, 22, 32, 20, max(0, min(100, percent)), width=4)

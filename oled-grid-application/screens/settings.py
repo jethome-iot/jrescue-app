@@ -10,8 +10,27 @@ def settings_items(timeout):
     """Share translated menu labels with the approved screen previews."""
     current = 'EN' if language.get_language() == 'ENG' else 'RU'
     delay = {30: t('display_30_short'), 60: t('display_60_short'), 0: t('display_never')}[timeout]
-    return [t('settings_language')+': '+current, t('reboot_title'),
-            t('poweroff_title'), t('settings_display')+': '+delay]
+    return [t('settings_language')+': '+current, t('settings_power'),
+            t('settings_display')+': '+delay]
+
+
+def power_items():
+    """Group system power actions without changing their physical hold guard."""
+    return [t('reboot_title'), t('poweroff_title')]
+
+
+def power_menu(menu):
+    """Keep Back inside Settings and propagate Home from either power action."""
+    selected = 0
+    actions = (reboot_system, poweroff_system)
+    while True:
+        choice = menu.select_from_list(t('settings_power'), power_items(), show_index=False,
+                                       show_counter=True, initial_index=selected)
+        if choice is None or choice == -1:
+            return choice
+        selected = choice
+        if actions[choice](menu) == -1:
+            return -1
 
 
 def display_timeout_items():
@@ -48,7 +67,7 @@ def select_display_timeout(menu):
 def settings_menu(menu):
     """Keep the selected action while rebuilding language and timeout labels."""
     selected = 0
-    actions = (select_language, reboot_system, poweroff_system, select_display_timeout)
+    actions = (select_language, power_menu, select_display_timeout)
     while True:
         choice = menu.select_from_list(
             t('settings_title'), settings_items(menu.idle.timeout),

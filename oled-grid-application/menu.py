@@ -8,6 +8,7 @@ import time
 import config
 from language import t
 from idle import IdleScreen
+from text_scroll import FieldScroller, STEP_SECONDS
 
 
 class Menu:
@@ -122,10 +123,20 @@ class Menu:
 
     def show_network_pages(self, pages, initial=0):
         """Navigate interface snapshots with a numeric position counter."""
-        def draw(page, navigation, counter):
-            self.display.draw_network_status(page['title'], '', page['status'], page['ip'],
-                                             navigation=navigation, counter=counter)
-        return self._show_pages(pages, draw, initial)
+        def draw(page, navigation, counter, offsets):
+            if 'rows' in page:
+                self.display.draw_network_fields(page['title'], page['rows'], counter=counter,
+                                                  ssid=page.get('ssid'), offsets=offsets)
+            elif 'value' in page:
+                self.display.draw_info_page(page['title'], page['value'], page.get('detail'),
+                                            navigation=navigation, counter=counter)
+            else:
+                self.display.draw_network_status(page['title'], '', page['status'], page['ip'],
+                                                 navigation=navigation, counter=counter)
+        def limits(page):
+            return (self.display.renderer.network_scroll_limits(page['rows'], page.get('ssid'))
+                    if 'rows' in page else [])
+        return self._show_pages(pages, draw, initial, animation=limits)
 
     def show_info_page(self, page):
         """Keep informational details static until Back/Home; center does nothing."""
@@ -139,21 +150,44 @@ class Menu:
 
     def show_web_pages(self, pages):
         """Page through current URLs without reloading them on center presses."""
+        return self.show_text_pages(pages)
+
+    def show_text_pages(self, pages):
+        """Share passive paging for Device facts and Web links."""
         def draw(page, navigation, counter):
             self.display.draw_info_page(page['title'], page['value'], page.get('detail'), counter=counter)
         return self._show_pages(pages, draw, 0, refresh=False)[0]
 
-    def _show_pages(self, pages, draw_page, initial, refresh=True):
+    def _show_pages(self, pages, draw_page, initial, refresh=True, animation=None):
         """Share nonwrapping paging, refresh and Back/Home across read-only screens."""
         if not pages:
             return None, 0
         selected = min(max(initial, 0), len(pages)-1)
+        previous = None
+        last_offsets = None
+        force = True
         while True:
             page = pages[selected]
+            if previous != selected:
+                scroller = FieldScroller(animation(page) if animation else [])
+                started = time.monotonic()
+                previous, last_offsets, force = selected, None, True
+            offsets = scroller.offsets(time.monotonic()-started)
             navigation = ('both' if selected and selected+1 < len(pages) else
                           'up' if selected else 'down' if len(pages) > 1 else '')
-            draw_page(page, navigation, '{}/{}'.format(selected+1, len(pages)))
-            key = self.idle.wait_for_key()
+            if (force or offsets != last_offsets) and not self.idle.sleeping:
+                counter = '{}/{}'.format(selected+1, len(pages))
+                if animation:
+                    draw_page(page, navigation, counter, offsets)
+                else:
+                    draw_page(page, navigation, counter)
+                last_offsets = offsets
+                force = False
+            key = (self.idle.wait_for_key(timeout=STEP_SECONDS) if scroller.duration else
+                   self.idle.wait_for_key())
+            if key is None:
+                continue
+            force = True
             if key == KEY_UP:
                 selected = max(0, selected-1)
             elif key == KEY_DOWN:

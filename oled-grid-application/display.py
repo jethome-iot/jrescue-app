@@ -241,6 +241,11 @@ class DisplayManager:
         self._present(self.renderer.network_status(title, interface, link, ip,
                                                     navigation=navigation, counter=counter))
 
+    def draw_network_fields(self, title, rows, counter='', ssid=None, offsets=None):
+        """Present one complete frame while only overflowing values move."""
+        self._present(self.renderer.network_fields(title, rows, counter=counter,
+                                                   ssid=ssid, offsets=offsets))
+
     def draw_info_page(self, title, value, detail=None, navigation='', counter=''):
         """Present a device/version snapshot without background polling."""
         self._present(self.renderer.info_page(title, value, detail, navigation=navigation, counter=counter))
