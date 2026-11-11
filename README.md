@@ -483,7 +483,7 @@ For issues and questions:
 
 ## 📝 Version
 
-**Current version:** v2.2.0
+**Current version:** v2.2.1
 
 ## 🎯 Project Structure
 
