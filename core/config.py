@@ -81,7 +81,10 @@ WEB_SERVER_PORT = 8124
 
 # Numeric HTTPS endpoints keep interface reachability checks independent of DNS.
 NETWORK_STATUS_TARGETS = ('1.1.1.1', '8.8.8.8')
+NETWORK_STATUS_IPV6_TARGETS = ('2606:4700:4700::1111', '2001:4860:4860::8888')
 NETWORK_STATUS_TIMEOUT = 1.5
+NETWORK_DNS_TIMEOUT = 3
+NETWORK_CONTROL_LOCK = '/run/jrescue/network-control.lock'
 
 AP_SERVICE = "jrescue-ap.service"
 AP_ADDR = "10.42.0.1"

@@ -32,6 +32,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import config
 from utils import run_command
+from network_control import NetworkBusyError, network_change_lock
 
 try:
     # Reuse the terse-nmcli splitter (handles escaped ':' in SSIDs).
@@ -462,6 +463,19 @@ class APHandler:
     # ----------------------------------------------------------------- handoff
     def provision(self, ssid: str, password: str = None,
                   progress_cb: Optional[Callable[[str, str], None]] = None) -> dict:
+        """Keep the AP handoff exclusive against other frontends' network restarts."""
+        try:
+            with network_change_lock():
+                return self._provision(ssid, password, progress_cb)
+        except NetworkBusyError:
+            return {'ok': False, 'ip': None, 'error': 'network operation in progress',
+                    'error_code': ERR_BUSY}
+        except OSError:
+            return {'ok': False, 'ip': None, 'error': 'network control unavailable',
+                    'error_code': ERR_RADIO_BUSY}
+
+    def _provision(self, ssid: str, password: str = None,
+                   progress_cb: Optional[Callable[[str, str], None]] = None) -> dict:
         """Join <ssid>, tearing the AP down first; roll back to the AP on failure.
 
         Returns {'ok': bool, 'ip': str|None, 'error': str, 'error_code': str}.

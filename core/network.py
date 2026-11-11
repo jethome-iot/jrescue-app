@@ -14,9 +14,11 @@ import fcntl
 import ipaddress
 import socket
 import struct
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
+from urllib.parse import urlsplit
 import config
 from utils import (
     run_command, check_command_exists, print_error, print_success,
@@ -130,24 +132,81 @@ def check_interface_internet(device: dict) -> Optional[bool]:
     TCP success does not verify DNS, TLS certificates or a captive portal.
     """
     bind_option = getattr(socket, 'SO_BINDTODEVICE', None)
-    if not device.get('connected') or not device.get('ip') or bind_option is None:
+    if not device.get('connected') or bind_option is None:
         return None
-    for target in config.NETWORK_STATUS_TARGETS:
+    addresses = device.get('addresses') or ([device['ip']] if device.get('ip') else [])
+    sources = {}
+    for value in addresses:
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
-                connection.settimeout(config.NETWORK_STATUS_TIMEOUT)
-                connection.setsockopt(socket.SOL_SOCKET, bind_option,
-                                      device['interface'].encode('utf-8')+b'\0')
-                connection.bind((device['ip'], 0))
-                connection.connect((target, 443))
-                return True
-        except OSError as exc:
-            if exc.errno in (errno.EPERM, errno.EACCES, errno.ENODEV,
-                              errno.EADDRNOTAVAIL, errno.ENOPROTOOPT):
+            address = ipaddress.ip_address(value.split('%', 1)[0])
+        except (ValueError, AttributeError):
+            continue
+        if not (address.is_link_local or address.is_unspecified or address.is_loopback or address.is_multicast):
+            sources.setdefault(address.version, str(address))
+    for version, source in sources.items():
+        family = socket.AF_INET if version == 4 else socket.AF_INET6
+        targets = config.NETWORK_STATUS_TARGETS if version == 4 else config.NETWORK_STATUS_IPV6_TARGETS
+        for target in targets:
+            try:
+                with socket.socket(family, socket.SOCK_STREAM) as connection:
+                    connection.settimeout(config.NETWORK_STATUS_TIMEOUT)
+                    connection.setsockopt(socket.SOL_SOCKET, bind_option,
+                                          device['interface'].encode('utf-8')+b'\0')
+                    connection.bind((source, 0) if version == 4 else (source, 0, 0, 0))
+                    connection.connect((target, 443) if version == 4 else (target, 443, 0, 0))
+                    return True
+            except OSError as exc:
+                if exc.errno in (errno.EPERM, errno.EACCES, errno.ENODEV,
+                                  errno.EADDRNOTAVAIL, errno.ENOPROTOOPT,
+                                  errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT):
+                    return None
+            except (ValueError, TypeError):
                 return None
-        except (ValueError, TypeError):
-            return None
-    return False
+    return False if sources else None
+
+
+def get_internet_status(devices, check_dns=True):
+    """Summarize interface probes, optionally resolving the firmware host.
+
+    The resolver runs in a child because libc DNS calls have no Python timeout;
+    a worker thread would keep the OLED waiting indefinitely on a broken DNS.
+    DNS describes the system resolver, while interface reachability stays bound
+    to each interface above. Neither result proves a TLS session or API health.
+    """
+    results = [device.get('internet') for device in devices
+               if device.get('connected') and (device.get('ip') or device.get('addresses'))]
+    unreadable = any('state' in device and device['state'] is None for device in devices)
+    online = True if True in results else None if None in results or not devices or unreadable else False
+    dns = None
+    hostname = urlsplit(config.JETHOME_API_BASE).hostname
+    if check_dns and results and hostname:
+        script = 'import socket,sys; socket.getaddrinfo(sys.argv[1],443,socket.AF_UNSPEC,socket.SOCK_STREAM)'
+        code, _, _ = run_command([sys.executable, '-c', script, hostname],
+                                  check=False, timeout=config.NETWORK_DNS_TIMEOUT)
+        dns = True if code == 0 else False if code == 1 else None
+    return {'internet': online, 'dns': dns}
+
+
+def _status_addresses(fields, interface):
+    """Keep all assigned IPv4/IPv6 addresses, including the scope of link-local IPv6."""
+    addresses = []
+    for prefix, version in (('IP4.ADDRESS', 4), ('IP6.ADDRESS', 6)):
+        for key, value in fields.items():
+            if not key.startswith(prefix):
+                continue
+            host, _, scope = value.split('/', 1)[0].partition('%')
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                continue
+            if address.version != version or address.is_unspecified or address.is_loopback or address.is_multicast:
+                continue
+            text = str(address)
+            if version == 6 and (scope or address.is_link_local):
+                text += '%'+(scope or interface)
+            if text not in addresses:
+                addresses.append(text)
+    return addresses
 
 
 class NetworkHandler:
@@ -365,6 +424,19 @@ class NetworkManagerHandler(NetworkHandler):
 
     def connect_wifi(self, ssid: str, password: str = None) -> bool:
         """Connect to WiFi using nmcli"""
+        from network_control import NetworkBusyError, network_change_lock
+        self.last_error, self.last_error_code = '', ''
+        try:
+            with network_change_lock():
+                return self._connect_wifi(ssid, password)
+        except NetworkBusyError:
+            self.last_error_code = 'busy'
+        except OSError:
+            self.last_error_code = 'unavailable'
+        return False
+
+    def _connect_wifi(self, ssid: str, password: str = None) -> bool:
+        """Activate an SSID while holding the cross-frontend network lock."""
         self.last_error, self.last_error_code = '', ''
         if not self.available:
             self.last_error_code = 'unavailable'
@@ -483,7 +555,8 @@ class NetworkManagerHandler(NetworkHandler):
         for kind, names in (('ethernet', self._eth_devices), ('wifi', self._wifi_devices)):
             for name in names:
                 ret, out, _ = run_command(
-                    ['nmcli', '-t', '-f', 'GENERAL.STATE,IP4.ADDRESS', 'device', 'show', name],
+                    ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.CON-UUID,IP4.ADDRESS,IP6.ADDRESS',
+                     'device', 'show', name],
                     check=False, timeout=5)
                 fields = {}
                 if ret == 0:
@@ -502,12 +575,26 @@ class NetworkManagerHandler(NetworkHandler):
                             carrier = source.read().strip() == '1'
                     except OSError:
                         pass
+                ssid = None
+                profile = fields.get('GENERAL.CON-UUID')
+                if kind == 'wifi' and state == 100 and profile and profile != '--':
+                    code, value, _ = run_command(
+                        ['nmcli', '-t', '-f', '802-11-wireless.ssid', 'connection', 'show', 'uuid', profile],
+                        check=False, timeout=5)
+                    if code == 0:
+                        for line in value.splitlines():
+                            parts = _nmcli_split(line)
+                            if len(parts) >= 2 and parts[0] == '802-11-wireless.ssid':
+                                ssid = parts[1]
+                                break
+                addresses = _status_addresses(fields, name)
                 devices.append({
                     'interface': name, 'kind': kind, 'state': state,
                     'connected': state == 100, 'carrier': carrier,
-                    'ip': next((value.split('/')[0] for key, value in fields.items()
-                                if key.startswith('IP4.ADDRESS') and value), None),
+                    'ip': next((value for value in addresses if ':' not in value), None),
+                    'addresses': addresses,
                     'internet': None,
+                    'ssid': ssid,
                 })
         if check_internet and devices:
             try:
