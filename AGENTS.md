@@ -110,13 +110,15 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   stronger strokes for the 0.96-inch screen. Settings uses one 15px cog with eight
   teeth and a clear center hole, replacing the old slider icon at the user's request.
   There is no main header or telemetry
-  polling. **Do not restore Memory or CPU/RAM/eMMC gauges.** The user removed
-  Memory entirely. Info contains Device / Version / Web with the same numbered
-  header and highlighted selection as Network. Device shows the model; Version
-  shows the recovery build's os-release name/version, with no app version or
-  uptime. Enter opens an entry; inside Device/Version, center and directions do
-  nothing. Back returns to the same selected Info entry, and Home returns to the
-  main grid. Model/version are read once per Info visit without a spinner or a
+  polling. **Do not restore CPU details or resource gauges.** Info contains
+  Device / Version / Web; SSH connection details are omitted from OLED. The list
+  uses the same numbered header and highlighted selection as Network. Device
+  has two passive pages: model `1/2` and total RAM/eMMC together `2/2`, using
+  regular two-row text and GiB/MiB values. UP/DOWN changes Device pages; center
+  does nothing. Version shows the recovery build's os-release name/version,
+  with no app version or uptime. Back returns to the same selected Info entry,
+  and Home returns to the main grid. Identity is cached once per Info visit;
+  capacities are read only on the first Device opening, without a spinner or a
   working thread. Web shows `http://` and the complete `IP:8124` on separate rows;
   UP/DOWN pages through multiple addresses with a numeric counter, without arrows.
   Center does nothing. Addresses are read fresh on entering Web from the kernel's
@@ -124,10 +126,13 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   network traffic, scans, connection changes or background polling. No configured
   address shows `No address`. The port comes from shared `config.WEB_SERVER_PORT`,
   also used by the web server. Do not add a recovery slot entry.
-  `core/system_info.py` reads
-  only device tree and os-release; RAM/eMMC collection and the filesystem
-  metadata reader were removed with Memory. Do not query storage or add
-  background telemetry to Info. The main grid and approved fonts remain unchanged.
+  `core/system_info.py` reads device tree/os-release, plus optional MemTotal
+  and sysfs capacity. eMMC detection accepts only whole `mmcblkN` devices with
+  `device/type=MMC`, preferring `config.EMMC_DEVICE`, then a sole MMC candidate.
+  Ambiguous/missing capacity shows `--`; SD, boot areas and partitions are excluded.
+  Sysfs sectors are 512 bytes. Never mount or open the block device to collect
+  Info, or interpret RAM-rootfs free space as eMMC capacity. The main grid and
+  approved fonts remain unchanged.
   All OLED text uses regular weight, including headers and selected rows.
   Inner screens use bundled Liberation Sans Regular; the keyboard uses bundled
   Liberation Sans Narrow Regular. Main captions keep system DejaVu Sans Condensed.
@@ -194,9 +199,11 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   Preview scripts are local development aids and are not part of the repository.
   **Keep only the latest generated previews** in `~/jrescue-oled-previews/`:
   the user explicitly requested deleting previous versions because they were
-  hard to find. Update `02_haos/` in place and remove superseded generated
-  variant folders; do not maintain duplicate historical copies to preserve old
-  links. Keep the latest main files directly in the root as `01-menu.png`,
+  hard to find. Publish one flat current set in this directory and remove
+  superseded generated files. Do not create duplicate `02_haos/`, `eng/` or
+  `rus/` folders there; keep native frames and working variants in `/tmp`.
+  Overwrite current preview files in place instead of preserving old links.
+  Keep the latest main files directly in the root as `01-menu.png`,
   `02-wifi-keyboard.png`, `03-demo.gif`, and `04-wifi.gif`, with a short README;
   `05-inner-menus.png` shows the current inner-screen typography.
   `06-wifi-networks.png` shows compact short and wrapped SSIDs in ENG/RUS.
@@ -212,7 +219,8 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   `17-network-status.png` and `18-network-status.gif` show Ethernet/Wi-Fi pages
   with Internet status and numeric page counters, without navigation arrows.
   `19-system-info.png` and `20-system-info.gif` show the approved Info list,
-  model, recovery build version and current Web URLs in ENG/RUS, with no Memory entry.
+  Device's model and combined RAM/eMMC page, recovery version and current Web URLs
+  in ENG/RUS. CPU and SSH pages are removed.
   The user approved trying the four-row password-cursor preview; it is now
   implemented. The user rejected an eye button and a separate password overview:
   do not add them. The centered 46px space, `.`/`_` shortcuts, clear symbols and
@@ -252,33 +260,62 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   size; frames drawn while asleep are retained but not written. Waking restores
   the latest logical frame without changing framebuffer format/stride handling.
   Runtime timeout choices are 30/60/0 seconds (0 = never), with 60 on every start.
-  Display and Power off menu previews are `21-settings.png` / `22-settings.gif`;
+  Settings previews are `21-settings.png` / `22-settings.gif`;
   the user approved them and their menu wiring is implemented. Settings has
-  Language, Reboot, Power off, then Display with the current delay. All selection
+  Language, Reboot & off, then Display with the current delay. Russian power label:
+  `Перезапуск/выкл.`. The power submenu groups Reboot and Power off; both retain
+  their fresh three-second hold. Back returns to Settings with the power action
+  selected; Home returns to the main grid. Help and its previews are removed. All selection
   lists and Network status screens show a position counter
   (e.g. `2/4`) at the top right, including `1/1` for a single page. Do not draw
-  scroll/page arrows in any menu header: the counter is sufficient. Info's single model/version details
-  use `1/1`. The 2×2
+  scroll/page arrows in any menu header: the counter is sufficient. Device uses
+  `1/2` and `2/2`; Version uses `1/1`. The 2×2
   main grid is unchanged. The selected
   parent action and current option stay focused when reopening a list. Back/Home
   never apply a new timeout.
   `poweroff_system()` shares reboot's exact hold guard and requests
   `systemctl --no-block poweroff`; after the hold show `Powering off...` rather
   than generic Wait. The 2×2 main grid, fonts and keyboard remain unchanged.
-- **OLED Network exposes WiFi connect and Network status.** The latter replaces
+- **OLED Network exposes WiFi connect, Network status and Restart network.** Status replaces
   Ethernet status: every detected Ethernet and Wi-Fi device has a page, including
   disconnected devices. UP/DOWN pages without wrapping, numeric counters show
   the current page/total at the top right, ENTER refreshes while preserving the selection,
-  Back/Home return safely, and Left is ignored. Pages retain the approved
-  two-row design, showing the interface type, IPv4 address and connection/Internet
-  state, without MAC or speed. Status viewing never scans or changes networking.
+  Back/Home return safely, and Left/Right are ignored. Internet is the first page.
+  Ethernet has two rows (IP, Status); WiFi has three (Status, SSID, IP), with
+  regular 14px text and no field selection. Successful interface and Internet
+  states show `OK`; errors retain a cause. Interface Status describes its local
+  connection, separately from Internet reachability. All assigned IPv4/IPv6
+  addresses stay in one IP row, separated by ` | `, including scoped link-local
+  IPv6. There is no separate IPv6 or SSID page. Long values scroll automatically
+  one row at a time: 2px per 100ms, with 1.4s pauses at the start/end. Labels and
+  short values stay fixed; inline IP markers show hidden continuation. Rendering
+  and measuring share the same field geometry. `text_scroll.py: FieldScroller`
+  runs through timed UI-thread waits, never resets inactivity and does not draw
+  while the display sleeps. Status viewing never scans or changes networking.
+  SSIDs come from the active connection UUID's wireless.ssid, not its profile name.
   `get_network_status(check_internet=True)` checks connected, addressed devices
-  independently, using TCP/443 to `NETWORK_STATUS_TARGETS` with a 1.5s timeout
+  independently, using TCP/443 to `NETWORK_STATUS_TARGETS` / `NETWORK_STATUS_IPV6_TARGETS` with a 1.5s timeout
   per target and sockets bound to both the interface (`SO_BINDTODEVICE`) and its
-  IPv4 address. Devices are checked in parallel (up to four workers). Failure to
+  source address. IPv4 and routable IPv6 are supported; link-local-only Internet
+  reachability remains unknown. Devices are checked in parallel (up to four workers). Failure to
   bind or insufficient permissions means unknown, never an unbound fallback.
   This is external TCP reachability, not a DNS/TLS/captive-portal test, and it
   does not gate downloads. Core's default snapshot makes no external probes.
+  OLED calls `get_internet_status(..., check_dns=False)` to summarize those
+  probes without starting a DNS resolver child. Only opening/Enter refreshes data.
+  Restart network (`25-network-restart.png` / `26-network-restart.gif`) opens
+  one fresh 3s hold directly, without a WiFi/Ethernet/NM chooser. The warning is
+  `Connections / will drop!`, or three Russian rows `Все / соединения / прервутся!`.
+  Back/Home/input failure never start a restart. `core/network_control.py` captures
+  active UUIDs, restarts NetworkManager and attempts to reactivate every captured
+  profile, retaining credentials/static settings. One failed profile never skips
+  subsequent ones; a timed-out service job still gets recovery attempts. An
+  already-active setup AP is stopped/restored through its existing service in a
+  finally block, including failures; an inactive AP is never raised by this menu.
+  Commands are bounded and run in one joined worker.
+  A nonblocking flock at `NETWORK_CONTROL_LOCK` serializes restarts with direct
+  Wi-Fi activation and portal provisioning across frontends. Busy actions return
+  a translated error without changing radio state or overwriting provisioning state.
   The setup AP
   is raised by systemd boot scripts; there is no Phone AP / manual AP action.
   Direct Wi-Fi connect still releases the single radio from an active AP.

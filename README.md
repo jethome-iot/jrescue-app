@@ -150,8 +150,8 @@ All four actions remain visible. UP/DOWN/LEFT/RIGHT selects a card without
 wrapping across edges; ENTER opens it, and HOME resets to Network. Captions are
 regular and fitted to the 128×64 panel, with wider, stronger pixel icons for the
 0.96-inch display. Settings uses a single cog icon. Info contains Device,
-Version and Web, showing the model, recovery build version and current web links. It has no Memory
-entry, app version, uptime or telemetry gauges.
+Version and Web. Device has model and combined RAM/eMMC capacity pages; Version
+shows the recovery build. CPU, SSH, app version, uptime and telemetry gauges are omitted.
 Inner screens use the selected 02 Liberation Sans style, plain white titles with
 a thin underline, compact text spacing and
 circular feedback. Page changes are immediate, without slide transitions.
@@ -162,7 +162,8 @@ after the user selects a variant.
 
 The OLED and console interfaces start in English without a language prompt.
 The OLED opens its 2×2 main menu directly, without a startup splash or delay.
-Settings contains Language, Reboot, Power off and Display, in that order. Display offers
+Settings contains Language, Reboot & off, then Display. The power submenu groups
+Reboot and Power off, both with the same three-second hold. Display offers
 30 seconds, 1 minute (default), or Never; changes are kept in RAM only. Lists
 focus the current setting, and Back/Home leaves it unchanged.
 Selection lists and Network status pages show their position and total (e.g. `2/4`) at the top
@@ -202,20 +203,37 @@ canceled through any frontend: the application waits for the writer to finish.
 ```
 
 Going back is done with the hardware BACK button (HOME jumps to the main menu).
-The two OLED network actions are WiFi connect and Network status. The setup AP is
+The OLED network actions are WiFi connect, Network status and Restart network. The setup AP is
 started automatically by the systemd boot decision; there is no Phone AP or
 manual AP start/stop item in the application. Network status shows every detected
 Ethernet and Wi-Fi adapter, including disconnected ones, on separate pages.
 UP/DOWN changes the page; the top right shows only its number/total.
 ENTER refreshes the status while keeping the current page; BACK/HOME returns.
-Each page shows the adapter type, IPv4 address and Internet or link state.
-MAC and speed are omitted. Viewing status does not interrupt Wi-Fi or the AP.
+An Internet summary comes first. Ethernet shows IP and Status; WiFi shows
+Status, SSID and IP together. Successful states show OK, while failures show
+their cause. Interface Status describes the local connection. All IPv4/IPv6
+addresses stay on the same adapter page, with scoped link-local IPv6 included.
+Long SSID/IP values scroll automatically one row at a time with pauses for
+reading; labels and short values stay fixed. No field selection is needed.
+Inline IP markers show hidden text; headers retain only numeric page counters.
+Animation does not reset the one-minute display timeout. MAC and speed are
+omitted. Viewing status does not interrupt Wi-Fi or the AP.
+The SSID comes from the active profile's wireless settings, not its display name.
+
+Restart network immediately opens a three-second center hold, warning that
+connections will drop. It restarts NetworkManager and reactivates captured
+profiles, preserving credentials and static configuration. Every captured
+profile gets an attempt even if an earlier one fails. An already-active setup
+AP is stopped and restored through systemd in a finally block. Restarts do not
+raise an inactive AP. A shared nonblocking lock coordinates the action with
+Wi-Fi connection and web provisioning; a busy action reports an error.
 
 Internet status uses bounded TCP/443 checks through each adapter separately,
-binding both the socket's interface and its source IPv4 address. The targets are
-1.1.1.1 and 8.8.8.8, with a 1.5-second timeout per target; adapters are checked in
-parallel. An unavailable interface binding shows unknown status. This checks
-external TCP reachability; DNS, TLS and captive portals are not diagnosed here.
+binding both the socket's interface and its source address. IPv4 and routable
+IPv6 use the configured public targets with a 1.5-second timeout per target; adapters are checked in
+parallel. An unavailable interface binding shows unknown status. These probes
+check external TCP reachability. The OLED screen skips DNS resolution and shows
+only Internet status. TLS and captive portals are not diagnosed.
 The indicator does not prevent image downloads.
 Wi-Fi SSID lists use 12px text; wrapped names use a 13px line pitch, keeping
 the lines close together without changing the typography of other menus.
@@ -355,15 +373,22 @@ BACK/HOME cancels; stick directions do not cancel. Button input errors never sta
 #### System Information
 
 Info opens a numbered selection list with the same highlighted rows as Network:
-Device, Version and Web. UP/DOWN selects an entry and ENTER opens it. BACK
+Device, Version and Web, without SSH connection details. UP/DOWN selects an entry
+and ENTER opens it. BACK
 returns to the same selection; HOME returns to the main grid. ENTER on a detail
 screen does nothing. Model/version are read once per Info visit without a
 loading animation.
 
+Device has two passive pages: model (1/2) and total RAM/eMMC capacity (2/2).
+UP/DOWN changes the page; center does nothing. Capacities are read once on the
+first Device opening during an Info visit. RAM comes from MemTotal; eMMC size
+comes from the whole MMC device's sysfs sector count. SD cards and boot areas
+are excluded. Missing or ambiguous values show `--`, without mounting a disk.
+The values use GiB/MiB and do not report free space or live resource usage.
+
 Model comes from the device tree with board detection as a fallback. Version
 shows the recovery build's name/version from os-release, not the application
-release. Memory, app version and uptime were removed. Opening Info does not
-collect RAM/eMMC statistics or read filesystem metadata.
+release. App version and uptime are omitted. Info reads no filesystem metadata.
 
 Web displays `http://` above the complete current `IP:8124`. With multiple
 addresses, UP/DOWN changes pages and the header shows `1/2`, without arrows.
@@ -439,8 +464,8 @@ Hardware Buttons Navigation:
 ```
 1. Main menu → Navigate to "Info"
 2. ENTER → Open device information
-3. UP/DOWN → Select Device or Version
-4. ENTER → Open details; center and directions have no action inside
+3. UP/DOWN → Select Device, Version or Web
+4. ENTER → Open details; UP/DOWN pages through Device/Web, center does nothing
 5. BACK → Return to Info; HOME → Return to the main grid
 ```
 
@@ -474,7 +499,7 @@ jrescue-app/
 │   ├── image_writer.py          # Protected streaming writer for every flash path
 │   ├── usb.py                   # USB device detection, mounting, image scan
 │   ├── utils.py                 # curses menus/dialogs, system info, helpers
-│   ├── system_info.py           # Device model and recovery build version
+│   ├── system_info.py           # Device/build identity and total RAM/eMMC capacity
 │   └── translations.py          # i18n (EN/RU)
 │
 ├── console-application/          # Arrow-key TUI on the (serial) console
