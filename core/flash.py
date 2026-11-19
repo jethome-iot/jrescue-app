@@ -169,28 +169,16 @@ class FlashHandler:
         return True
 
     def confirm_flash(self, image_path: str) -> bool:
-        """Curses confirmation screen for flashing image_path to this device."""
-        from utils import show_confirm_screen
-
-        is_compressed = image_path.endswith('.xz')
-        image_size = os.path.getsize(image_path)
-        compressed_label = f" ({t('compressed')})" if is_compressed else ""
-        return show_confirm_screen(
-            t("confirm_flash_operation"),
-            [
-                f"{t('image_to_flash')}:",
-                f"  {os.path.basename(image_path)}",
-                f"  {t('size')}: {format_bytes(image_size)}{compressed_label}",
-                "",
-                f"{t('target_device')}:",
-                f"  {self.emmc_device}",
-                "",
-                f"⚠️  {t('all_data_erased', device=self.emmc_device)}",
-                f"⚠️  {t('cannot_be_undone')}",
-            ],
-            yes_label=t("flash"),
-            no_label=t("cancel"),
-        )
+        """Require explicit OK with the full erase warning and target visible."""
+        from utils import show_compact_confirmation
+        size = os.path.getsize(image_path)
+        return show_compact_confirmation(
+            t('tui_flash_confirm'),
+            [t('tui_flash_warning'), '',
+             t('tui_image')+': ' + os.path.basename(image_path),
+             t('tui_size')+': ' + format_bytes(size),
+             t('tui_target')+': ' + self.emmc_device],
+            size=(72, 14))
 
     def flash_image(self, image_path: str, verify: bool = False, skip_confirmation: bool = False,
                     progress_cb=None) -> bool:
@@ -464,47 +452,12 @@ class FlashHandler:
 
 
 def select_target_device() -> Optional[str]:
-    """
-    Interactive function to select target eMMC/SD device using arrow keys
-
-    Returns:
-        Device path (e.g., '/dev/mmcblk1') or None
-    """
-    from utils import find_mmcblk_devices, show_menu, show_text_screen
-
-    devices = find_mmcblk_devices()
-
-    if not devices:
-        show_text_screen("Select Target Device", [
-            "No mmcblk devices found.",
-            "Please check that eMMC/SD devices are connected",
-            "(run 'lsblk' to see available devices).",
-        ])
+    """Select a target explicitly before its mandatory erase confirmation."""
+    from utils import find_mmcblk_devices, show_wait_screen, show_table_menu, show_text_screen
+    devices, output = show_wait_screen(t('tui_target'), t('tui_wait'), find_mmcblk_devices)
+    if isinstance(devices, Exception) or not devices:
+        show_text_screen(t('tui_target'), [t('tui_no_target')])
         return None
-
-    # Build menu options
-    options = []
-
-    # Add "Back/Cancel" option at the top
-    options.append("← Back / Cancel")
-
-    for device in devices:
-        default_marker = " [DEFAULT]" if device['device'] == config.EMMC_DEVICE else ""
-        size_str = format_bytes(device['size'])
-        type_str = device['type']
-        option = f"{device['device']}{default_marker} - {size_str} - {type_str}"
-        options.append(option)
-
-    # Show interactive menu
-    choice = show_menu("Select Target Device", options)
-
-    if choice == 0 or choice == 1:
-        # Cancelled or "Back" selected
-        return None
-    elif 2 <= choice <= len(devices) + 1:
-        # Selected a device (adjusted for "Back" option)
-        return devices[choice - 2]['device']
-    else:
-        return None
-
-
+    rows = [(device['device'], device['type'], format_bytes(device['size'])) for device in devices]
+    choice = show_table_menu(t('tui_target'), [t('tui_target'), t('tui_type'), t('tui_size')], rows)
+    return devices[choice-1]['device'] if 1 <= choice <= len(devices) else None

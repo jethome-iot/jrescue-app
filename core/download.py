@@ -427,61 +427,21 @@ class DownloadHandler:
 
 
 def select_image_interactive(handler: DownloadHandler) -> Optional[dict]:
-    """
-    Interactive (curses-only) image selection.
-
-    Returns:
-        Selected image dict or None
-    """
-    from utils import show_wait_screen, show_text_screen
-
-    images, _ = show_wait_screen("Download", "Fetching image list...",
-                                 handler.list_available_images)
+    """Select a compatible API image from an adaptive table."""
+    from translations import t
+    from utils import show_wait_screen, show_text_screen, show_table_menu
+    images, output = show_wait_screen(t('tui_images'), t('tui_wait'), handler.list_available_images)
     if isinstance(images, Exception) or not images:
-        show_text_screen("Download", [
-            "No images available.",
-            "Failed to fetch the image list from the JetHome API.",
-            "Check the network connection and try again.",
-        ])
+        error = str(images) if isinstance(images, Exception) else handler.last_error
+        lines = ([t('tui_catalog_failed'), error] if error else
+                 [t('tui_no_images'), t('tui_no_sdcard', device=config.JETHOME_DEVICE_NAME)])
+        show_text_screen(t('tui_images'), lines)
         return None
-
-    # Build menu options
-    menu_options = []
-
-    # Add "Back/Cancel" option at the top (like ".." in file managers)
-    menu_options.append("← Back / Cancel")
-
-    # Add each image as a formatted menu option
-    for image in images:
-        # Format: "Name | Size | Version"
-        name = image['name']
-
-        # Handle size display
-        if 'size' in image and image['size'] > 0:
-            size_str = format_bytes(image['size'])
-        elif 'size_mb' in image:
-            size_str = f"~{image['size_mb']} MB"
-        else:
-            size_str = "Unknown size"
-
-        # Format the menu line
-        menu_line = f"{name} | {size_str}"
-        menu_options.append(menu_line)
-
-    choice = show_menu(f"Select Image to Download ({len(images)})", menu_options)
-
-    # choice == 0 means cancelled or error
-    # choice == 1 means "Back/Cancel" was selected
-    if choice == 0 or choice == 1:
-        return None
-
-    # choice >= 2 means an image was selected
-    # Subtract 2 because: 1 for 1-based indexing, 1 for "Back" option
-    image_index = choice - 2
-    if 0 <= image_index < len(images):
-        return images[image_index]
-
-    return None
+    rows = [(image.get('fw_type') or image['name'], image.get('version', '--'),
+           format_bytes(image['size']) if image.get('size') else '--') for image in images]
+    details = [image['filename'] for image in images]
+    choice = show_table_menu(t('tui_images'), [t('tui_system'), t('tui_version'), t('tui_size')], rows, details)
+    return images[choice - 1] if 1 <= choice <= len(images) else None
 
 
 def download_image_interactive(handler=None) -> Optional[str]:
@@ -492,6 +452,7 @@ def download_image_interactive(handler=None) -> Optional[str]:
         Path to downloaded file or None
     """
     from utils import show_progress_screen, show_text_screen
+    from translations import t
     import threading
 
     handler = handler if handler is not None else DownloadHandler()
@@ -503,8 +464,8 @@ def download_image_interactive(handler=None) -> Optional[str]:
 
     size_str = format_bytes(image['size']) if image.get('size') else "unknown size"
     confirm_choice = show_horizontal_menu(
-        f"Download {image['filename']} ({size_str})?",
-        ["Cancel", "Download"]
+        t("tui_download_confirm", filename=image["filename"], size=size_str),
+        [t("cancel"), t("tui_download")]
     )
 
     if confirm_choice != 2:
@@ -522,7 +483,7 @@ def download_image_interactive(handler=None) -> Optional[str]:
         return downloaded
 
     try:
-        result, output = show_progress_screen("Downloading", worker, cancel_event=cancel)
+        result, output = show_progress_screen(t("tui_downloading"), worker, cancel_event=cancel)
     finally:
         if cancel.is_set() and downloaded:
             handler.discard_download(downloaded)
@@ -531,7 +492,7 @@ def download_image_interactive(handler=None) -> Optional[str]:
 
     if isinstance(result, Exception) or not result:
         tail = [ln for ln in output.strip().splitlines() if ln.strip()][-6:]
-        show_text_screen("Download failed", tail or ["Download failed."])
+        show_text_screen(t("tui_download_failed"), tail or [handler.last_error or t("tui_download_failed")])
         return None
     return result
 

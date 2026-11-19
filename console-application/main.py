@@ -1,462 +1,339 @@
 #!/usr/bin/env python3
-"""
-Rescue Console Application - Main Entry Point
+"""Classic recovery console sharing network, download and protected image writers."""
 
-Curses-only console application for Linux rescue systems to flash eMMC with
-images. Supports downloading images via the JetHome API or loading from USB,
-with WiFi/Ethernet configuration through NetworkManager.
-"""
-
-import sys
 import os
 import signal
-import time
+import sys
 
-# Add core directory to path
 _core_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core')
 sys.path.insert(0, _core_path)
 
-# Import from core
 import config
+import ap
 import translations as app_locale
+import tui
 from translations import t
-from utils import (
-    require_root, print_info, print_error, run_command,
-    show_menu, show_horizontal_menu, input_dialog,
-    show_text_screen, show_wait_screen, show_progress_screen, show_confirm_screen,
-    show_settings_screen,
-    get_system_info, format_bytes, check_disk_space, ensure_directory,
-    check_web_app_status, get_local_ip
-)
-from network import get_network_handler
+from utils import (require_root, print_info, print_error, run_command, show_menu,
+                   show_horizontal_menu, input_dialog, show_text_screen,
+                   show_wait_screen, show_progress_screen, show_confirm_screen,
+                   show_compact_confirmation,
+                   show_table_menu, show_network_screen, show_power_pending,
+                   run_console_ui, format_bytes, check_disk_space, ensure_directory)
+from network import get_network_handler, get_web_urls, get_web_endpoints
+from network_control import restart_network
+from system_info import get_recovery_info, get_memory_info
 from download import DownloadHandler, download_image_interactive
 from usb import list_usb_devices_interactive, USBHandler
-import ap
 
 
-def _output_lines(captured: str, limit: int = 40) -> list:
-    """Turn captured stdout text into display lines for show_text_screen."""
-    lines = [ln.rstrip() for ln in captured.splitlines() if ln.strip()]
-    return lines[-limit:]
+def _output_lines(captured, limit=40):
+    """Keep diagnostic output bounded and inside curses."""
+    return [line.rstrip() for line in captured.splitlines() if line.strip()][-limit:]
+
+
+def wifi_error_lines(code, ssid=None):
+    """Put the cause and next step before any potentially long SSID."""
+    known = {'wrong_password', 'bad_password_format', 'auth_failed', 'not_found', 'no_dhcp',
+           'timeout', 'radio_busy', 'no_wifi', 'unavailable', 'busy'}
+    code = code if code in known else 'unknown'
+    hint = ('password' if code in ('wrong_password', 'bad_password_format', 'auth_failed') else
+          'router' if code == 'no_dhcp' else 'scan' if code == 'not_found' else
+          'adapter' if code in ('radio_busy', 'no_wifi') else 'retry')
+    lines = [t('tui_wifi_reason_' + code), t('tui_wifi_hint_' + hint)]
+    if ssid is not None:
+        lines += ['', 'SSID: ' + ssid]
+    return lines
 
 
 def network_setup_menu():
-    """Network setup submenu"""
-    network_handler = get_network_handler()
-
-    if not network_handler:
-        show_text_screen(t("network_menu"), [
-            t("nm_unavailable"),
-            t("nm_unavailable_hint"),
-        ])
+    """Switch Network tab contents directly, loading read-only data on demand."""
+    handler, output = show_wait_screen(t('tui_network'), t('tui_wait'), get_network_handler)
+    if isinstance(handler, Exception) or not handler:
+        show_text_screen(t('tui_network'), [t('nm_unavailable'), t('nm_unavailable_hint')])
         return
-
-    def title_fn():
-        # Live status in the menu title (refreshes every ~2s without a keypress),
-        # so plugging/unplugging a cable or connecting Wi-Fi shows immediately.
-        status = network_handler.get_connection_status()
-        if status['connected']:
-            line = status['ip'] or status['interface'] or "connected"
-            if status['ssid']:
-                line = f"{status['ssid']} {line}"
-        else:
-            line = "not connected"
-        return f'{t("network_options")} · {line}'
-
+    tab, devices, scan, wifi_index = 'status', None, None, 0
+    restart_return = 'status'
     while True:
-        options = [
-            t("back_to_main"),
-            t("connect_wifi"),
-            t("ethernet_status")
-        ]
+        if devices is None:
+            devices, output = show_wait_screen(t('tui_network'), t('tui_network_refresh'), handler.get_network_status)
+            if isinstance(devices, Exception) or (not devices and getattr(handler, 'last_error', '')):
+                show_text_screen(t('tui_network'), [t('tui_network_failed')])
+                return
+        if tab == 'wifi' and scan is None:
+            scan, output = show_wait_screen(t('tui_wifi'), t('scanning_networks'), wifi_networks, handler)
+            if isinstance(scan, Exception):
+                scan = {'networks': [], 'errors': wifi_error_lines('unknown')}
+        request = show_network_screen(devices or [], tab=tab,
+                                      networks=(scan or {}).get('networks', []),
+                                      error_lines=(scan or {}).get('errors'),
+                                      notice=(scan or {}).get('notice'), wifi_index=wifi_index,
+                                      return_tab=restart_return)
+        if request is None:
+            return
+        if request['tab'] == 'restart' and tab != 'restart':
+            restart_return = tab
+        tab, wifi_index = request['tab'], request['wifi_index']
+        if request['action'] == 'refresh':
+            if tab == 'wifi':
+                scan = None
+            else:
+                devices = None
+        elif request['action'] == 'connect':
+            networks = (scan or {}).get('networks', [])
+            if 0 <= wifi_index < len(networks):
+                def background(rows, cols):
+                    return tui.network_frame(rows, cols, devices or [], selected=1,
+                        networks=networks, wifi_index=wifi_index,
+                        notice=(scan or {}).get('notice'))[0]
+                wifi_setup(handler, selected=networks[wifi_index], background=background)
+                devices, scan = None, None
+        elif request['action'] == 'restart':
+            # The modal returns this only after an explicit OK.
+            restart_network_menu(confirmed=True)
+            devices, scan = None, None
+            tab = 'status'
 
-        choice = show_menu(title_fn(), options, title_fn=title_fn)
 
-        if choice == 0 or choice == 1:
-            # Cancelled or Back
-            break
-
-        elif choice == 2:
-            # WiFi setup
-            wifi_setup(network_handler)
-
-        elif choice == 3:
-            ethernet_status(network_handler)
+def restart_network_menu(confirmed=False):
+    """Restart existing connections after the compact OK/Cancel dialog."""
+    if not confirmed and not show_compact_confirmation(t('tui_restart_confirm'),
+                                    [t('tui_restart_warning'), '', t('tui_restart_profiles')]):
+        return
+    result, output = show_wait_screen(t('tui_restart'), t('tui_restarting'), restart_network, 'manager')
+    if not isinstance(result, dict) or not result.get('ok'):
+        code = result.get('error') if isinstance(result, dict) else 'failed'
+        show_text_screen(t('tui_restart'), [t('tui_network_busy' if code == 'busy' else 'tui_network_failed')])
 
 
-def wifi_setup(network_handler):
-    """WiFi configuration (scan, pick, password, connect) — all curses.
-
-    The radio is single: while the setup-AP holds it nothing can be scanned or
-    joined, so release it first (otherwise connecting from the console/OLED is
-    impossible whenever the AP came up automatically for lack of ethernet).
-    """
+def wifi_networks(network_handler):
+    """Viewing a tab must not disconnect the setup AP to perform a fresh scan."""
     ap_handler = ap.get_ap_handler()
     if ap_handler.is_ap_active():
-        show_wait_screen("WiFi", t("stopping_ap"), ap_handler.release_radio)
+        networks = ap_handler.read_scan_cache()
+        return {'networks': networks, 'notice': t('tui_wifi_cached'),
+                'errors': None if networks else [t('tui_wifi_cached'), t('tui_wifi_cached_empty')]}
+    networks = network_handler.scan_wifi()
+    if not networks:
+        code = getattr(network_handler, 'last_error_code', '')
+        return {'networks': [], 'errors': wifi_error_lines(code) if code else [t('no_networks'), t('make_sure_wifi')]}
+    return {'networks': networks}
 
-    networks, out = show_wait_screen("WiFi", t("scanning_networks"),
-                                     network_handler.scan_wifi)
 
-    if isinstance(networks, Exception) or not networks:
-        show_text_screen("WiFi", [
-            t("no_networks"),
-            t("make_sure_wifi"),
-        ] + _output_lines(out, limit=6))
+def wifi_setup(network_handler, selected=None, background=None):
+    """Edit credentials first, then release the AP only for an explicit connection."""
+    if selected is None:
+        scan, output = show_wait_screen(t('tui_wifi'), t('scanning_networks'), wifi_networks, network_handler)
+        if isinstance(scan, Exception) or not scan.get('networks'):
+            show_text_screen(t('tui_wifi'), wifi_error_lines('unknown') if isinstance(scan, Exception) else scan['errors'])
+            return
+        networks = scan['networks']
+        rows = tui.wifi_rows(networks)
+        choice = show_table_menu(t('tui_wifi'), ['SSID', t('tui_security'), t('tui_signal')], rows,
+                                ['SSID: ' + row[0] + '\n' + row[1] for row in rows])
+        if not 1 <= choice <= len(networks):
+            return
+        selected = networks[choice - 1]
+    ssid = selected['ssid']
+    secured = (selected.get('security') or '').strip().upper() not in ('', '--', 'OPEN')
+    password = ''
+    while True:
+        if secured:
+            password = input_dialog(t('tui_wifi'), 'SSID: ' + ssid, password=True,
+                                    initial=password, background=background)
+            if password is None:
+                return
+        def connect():
+            ap_handler = ap.get_ap_handler()
+            if ap_handler.is_ap_active() and not ap_handler.release_radio():
+                network_handler.last_error_code = 'radio_busy'
+                return False
+            return network_handler.connect_wifi(ssid, password if secured else None)
+        result, output = show_wait_screen(t('tui_wifi'), t('connecting_to', ssid=ssid), connect)
+        if result is True:
+            show_text_screen(t('tui_wifi'), [t('connected_to', ssid=ssid)])
+            return
+        code = getattr(network_handler, 'last_error_code', 'unknown')
+        lines = wifi_error_lines(code, ssid)
+        if code not in ('wrong_password', 'bad_password_format', 'auth_failed') or not secured:
+            show_text_screen(t('tui_wifi_failed'), lines)
+            return
+        if not show_confirm_screen(t('tui_wifi_failed'), lines,
+                                    yes_label=t('tui_edit_password'), no_label=t('tui_back')):
+            return
+
+
+def _power_action(action):
+    """Use nonblocking systemd shutdown requests after explicit OK."""
+    if not show_compact_confirmation(t('tui_' + action + '_confirm'),
+                                    [t('tui_' + action + '_warning'), t('tui_connections_drop')],
+                                    size=(54, 10)):
         return
-
-    # Build menu options as an aligned table: SSID · lock · encryption · signal.
-    # Fixed-width columns (+ the menu's fixed-width item numbers) keep the lock
-    # icons and everything after them on one vertical line for every row.
-    menu_options = [t("back_cancel")]
-    for network in networks:
-        ssid = network['ssid']
-        sec = (network['security'] or "").strip()
-        if sec in ("", "--"):
-            sec = "Open"
-        lock = "🔓" if sec == "Open" else "🔒"
-        try:
-            signal = int(network['signal'])
-        except (ValueError, TypeError):
-            signal = 0
-        bars = "█" * (signal // 25)
-        ssid_disp = (ssid[:17] + "…") if len(ssid) > 18 else ssid
-        menu_line = f"{ssid_disp:<18} {lock} {sec[:12]:<12} [{bars:<4}] {signal:>3}%"
-        menu_options.append(menu_line)
-
-    choice = show_menu(f'{t("select_network")} ({len(networks)})', menu_options)
-
-    if choice == 0 or choice == 1:
-        return
-
-    network_index = choice - 2
-    if not (0 <= network_index < len(networks)):
-        return
-
-    selected_network = networks[network_index]
-    ssid = selected_network['ssid']
-
-    # Ask for password if secured
-    password = None
-    if selected_network['security'] != "Open":
-        password = input_dialog(
-            t("wifi_pass_for", ssid=ssid),
-            t("enter_password"),
-            password=True
-        )
-        if password is None:
-            return  # cancelled
-
-    result, out = show_wait_screen("WiFi", t("connecting_to", ssid=ssid),
-                                   network_handler.connect_wifi, ssid, password)
-
-    if result is True:
-        _, test_out = show_wait_screen(t("test_connection"), t("testing_conn"),
-                                       network_handler.test_connectivity)
-        show_text_screen("WiFi", [t("connected_to", ssid=ssid), ""]
-                         + _output_lines(test_out))
+    title = t('rebooting') if action == 'reboot' else t('tui_powering_off')
+    result, output = show_wait_screen(title, title, run_command,
+                                   ['systemctl', '--no-block', action], check=False, timeout=10)
+    if isinstance(result, Exception) or not result or result[0] != 0:
+        show_text_screen(t('tui_request_failed'), _output_lines(output) or [t('tui_request_failed')])
     else:
-        show_text_screen("WiFi", [t("connect_failed_to", ssid=ssid), ""]
-                         + _output_lines(out, limit=10))
-
-
-def ethernet_status(network_handler):
-    """Report wired devices even when Wi-Fi is the active connection."""
-    devices, out = show_wait_screen(t('ethernet_status'), t('collecting_info'),
-                                    network_handler.get_ethernet_status)
-    if isinstance(devices, Exception) or not devices:
-        show_text_screen(t('ethernet_status'), [t('ethernet_missing')] + _output_lines(out))
-        return
-    lines = []
-    for device in devices:
-        carrier = device['carrier']
-        link = t('ethernet_up') if carrier is True else t('ethernet_down') if carrier is False else '--'
-        lines.extend([device['interface'], t('ethernet_link') + ': ' + link,
-                      'IP: ' + (device['ip'] or '--'), ''])
-    show_text_screen(t('ethernet_status'), lines)
+        show_power_pending(title)
 
 
 def _reboot_prompt():
-    """Post-flash success screen: return to menu or reboot."""
-    reboot_choice = show_horizontal_menu(
-        t("flashing_success"),
-        [t("return_menu"), t("reboot_now")]
-    )
-    if reboot_choice == 2:
-        time.sleep(1)
-        os.system('reboot')
+    """Release downloaded images and USB sources before this dialog is opened."""
+    choice = show_horizontal_menu(t('flashing_success'), [t('return_menu'), t('reboot_now')])
+    if choice == 2:
+        _power_action('reboot')
 
 
-def flash_to_device(image_path: str, cleanup=None) -> bool:
-    """Select target, confirm, flash with a curses progress screen.
-
-    cleanup (optional) runs after flashing regardless of outcome (e.g. USB unmount).
-    """
+def flash_to_device(image_path, cleanup=None):
+    """Join exactly one protected writer and release its source before any dialog."""
     from flash import FlashHandler, select_target_device
-
-    target_device = select_target_device()
-    if not target_device:
+    result = None
+    output = ''
+    try:
+        target = select_target_device()
+        if not target:
+            return False
+        handler = FlashHandler(emmc_device=target)
+        if handler.confirm_flash(image_path) is not True:
+            return False
+        def worker(progress):
+            progress(None, os.path.basename(image_path), target)
+            return handler.flash_image(image_path, skip_confirmation=True, progress_cb=progress)
+        result, output = show_progress_screen(t('title_flashing'), worker)
+    finally:
         if cleanup:
             cleanup()
-        return False
-
-    flash_handler = FlashHandler(emmc_device=target_device)
-
-    if not flash_handler.confirm_flash(image_path):
-        if cleanup:
-            cleanup()
-        return False
-
-    def worker(progress):
-        progress(None, os.path.basename(image_path), target_device)
-        return flash_handler.flash_image(image_path, skip_confirmation=True,
-                                         progress_cb=progress)
-
-    result, out = show_progress_screen(t("title_flashing"), worker)
-
-    if cleanup:
-        cleanup()
-
     if result is True:
         _reboot_prompt()
         return True
-
-    show_text_screen(t("flashing_failed"),
-                     _output_lines(out, limit=15) or [t("flashing_failed_body")])
+    show_text_screen(t('flashing_failed'), _output_lines(output, 15) or [t('flashing_failed_body')])
     return False
 
 
 def flash_from_http():
-    """Download image from the JetHome API and flash it"""
-    network_handler = get_network_handler()
-
-    if network_handler:
-        ok, out = show_wait_screen(t("title_download"), t("checking_network"),
-                                   network_handler.test_connectivity)
-        if ok is not True:
-            show_text_screen(t("title_download"), [
-                t("no_internet"),
-                t("configure_network"),
-            ] + _output_lines(out, limit=8))
-            return False
-
+    """Use the API directly; only the download worker receives a cancel token."""
     handler = DownloadHandler()
     try:
         handler.clear_cache()
     except (OSError, RuntimeError, ValueError) as exc:
-        show_text_screen(t("title_download"), [str(exc)])
+        show_text_screen(t('title_download'), [str(exc)])
         return False
-
-    # Check space only after old images have been released.
     free_space = check_disk_space(config.TEMP_DIR)
     if free_space < config.MIN_FREE_SPACE:
-        show_text_screen(t("title_download"), [
-            t("low_ram_space", space=format_bytes(free_space)),
-            t("need_ram_space", space=format_bytes(config.MIN_FREE_SPACE)),
-        ])
+        show_text_screen(t('title_download'), [t('low_ram_space', space=format_bytes(free_space)),
+                                               t('need_ram_space', space=format_bytes(config.MIN_FREE_SPACE))])
         return False
-
-    downloaded_image = download_image_interactive(handler)
-    if not downloaded_image:
+    downloaded = download_image_interactive(handler)
+    if not downloaded:
         return False
-
     try:
-        return flash_to_device(downloaded_image,
-                               cleanup=lambda: handler.discard_download(downloaded_image))
+        return flash_to_device(downloaded, cleanup=lambda:handler.discard_download(downloaded))
     finally:
-        handler.discard_download(downloaded_image)
+        handler.discard_download(downloaded)
 
 
 def flash_from_usb():
-    """Load image from USB and flash it"""
-    usb_handler = USBHandler()
-
+    """Unmount only a source mounted by this flow, after its writer has closed it."""
+    handler = USBHandler()
     device = list_usb_devices_interactive()
     if not device:
         return False
-
-    # Mount device (if not already mounted)
-    if device['mountpoint']:
-        mount_point = device['mountpoint']
-    else:
-        ok, out = show_wait_screen("USB", t("mounting_dev", device=device['device']),
-                                   usb_handler.mount_device, device['device'])
-        if ok is not True:
-            show_text_screen("USB", [t("mount_usb_failed")]
-                             + _output_lines(out, limit=8))
+    mounted_here = False
+    def cleanup():
+        nonlocal mounted_here
+        if mounted_here:
+            show_wait_screen('USB', t('tui_unmount'), handler.unmount_device)
+            mounted_here = False
+    try:
+        mount_point = device.get('mountpoint')
+        if not mount_point:
+            result, output = show_wait_screen('USB', t('mounting_dev', device=device['device']),
+                                            handler.mount_device, device['device'])
+            if result is not True:
+                show_text_screen('USB', [t('mount_usb_failed')]+_output_lines(output, 6))
+                return False
+            mounted_here = True
+            mount_point = handler.mount_point
+        images, output = show_wait_screen('USB', t('scanning_images'), handler.scan_for_images, mount_point)
+        if isinstance(images, Exception) or not images:
+            show_text_screen('USB', [t('no_images_on_usb')])
             return False
-        mount_point = usb_handler.mount_point
-
-    def unmount_if_needed():
-        if not device['mountpoint']:
-            usb_handler.unmount_device()
-
-    # Scan for images
-    images, out = show_wait_screen("USB", t("scanning_images"),
-                                   usb_handler.scan_for_images, mount_point)
-    if isinstance(images, Exception) or not images:
-        unmount_if_needed()
-        show_text_screen("USB", [t("no_images_on_usb")]
-                         + _output_lines(out, limit=8))
-        return False
-
-    # Build menu options
-    menu_options = [t("back_cancel")]
-    for image in images:
-        menu_line = f"{image['filename']} | {format_bytes(image['size'])} | {image['relative_path']}"
-        menu_options.append(menu_line)
-
-    choice = show_menu(f'{t("select_image_usb")} ({len(images)})', menu_options)
-
-    if choice == 0 or choice == 1:
-        unmount_if_needed()
-        return False
-
-    image_index = choice - 2
-    if not (0 <= image_index < len(images)):
-        unmount_if_needed()
-        return False
-
-    selected_image = images[image_index]
-    return flash_to_device(selected_image['path'], cleanup=unmount_if_needed)
+        rows = [(image['filename'], format_bytes(image['size'])) for image in images]
+        choice = show_table_menu(t('source_usb'), [t('tui_image'), t('tui_size')], rows,
+                               [image.get('relative_path') or image['filename'] for image in images])
+        if not 1 <= choice <= len(images):
+            return False
+        return flash_to_device(images[choice - 1]['path'], cleanup=cleanup)
+    finally:
+        cleanup()
 
 
 def flash_image_menu():
-    """Flash image to eMMC - with source selection"""
+    """Choose JetHome images or USB; Esc returns to the main menu."""
     while True:
-        options = [
-            t("back_to_main"),
-            t("source_http"),
-            t("source_usb"),
-        ]
-
-        source_choice = show_menu(t("select_image_source"), options)
-
-        if source_choice == 0 or source_choice == 1:
+        choice = show_menu(t('tui_flash'), [t('tui_images'), t('tui_usb')])
+        if not choice:
+            return
+        if (flash_from_http() if choice == 1 else flash_from_usb()):
             return
 
-        elif source_choice == 2:
-            if flash_from_http():
-                return
 
-        elif source_choice == 3:
-            if flash_from_usb():
-                return
+def _capacity(value):
+    """Use total capacities, never free space on the RAM rootfs."""
+    if not value:
+        return '--'
+    unit, divisor = ('GiB', 1024 ** 3) if value >= 1024 ** 3 else ('MiB', 1024 ** 2)
+    return '{:.1f} {}'.format(value / divisor, unit)
 
 
 def system_info_menu():
-    """Display system information in a scrollable curses screen."""
-    def collect():
-        info = get_system_info()
-
-        # Only the fields worth showing here (kernel/arch/memory/paths dropped).
-        rows = [
-            (t("hostname"), info['hostname']),
-            (t("device"), config.JETHOME_DEVICE_NAME),
-            (t("version"), config.APP_VERSION),
-        ]
-
-        network_handler = get_network_handler()
-        if network_handler:
-            status = network_handler.get_connection_status()
-            if status['connected']:
-                rows.append((t("network"), t("net_connected", iface=status['interface'])))
-                if status['ip']:
-                    rows.append((t("ip_address"), status['ip']))
-                if status['ssid']:
-                    rows.append((t("wifi_network"), status['ssid']))
-            else:
-                rows.append((t("network"), t("net_not_connected")))
-
-        web_port = 8124
-        if check_web_app_status("localhost", web_port):
-            local_ip = get_local_ip() or "localhost"
-            rows.append((t("web_ui"), t("web_ui_running")))
-            rows.append((t("access_url"), f"http://{local_ip}:{web_port}"))
-        else:
-            rows.append((t("web_ui"), t("web_ui_stopped", port=web_port)))
-
-        # Dynamic label column so translated labels of any width stay aligned,
-        # with a blank row between entries for a small vertical gap.
-        w = max(len(lbl) for lbl, _ in rows) + 3
-        lines = []
-        for lbl, val in rows:
-            lines.append(f"{(lbl + ':'):<{w}}{val}")
-            lines.append("")
-        return lines[:-1]
-
-    lines, _ = show_wait_screen(t("system_info"), t("collecting_info"), collect)
-    if isinstance(lines, Exception):
-        lines = [str(lines)]
-    # Live-refresh so the IP/network fields track cable plug/unplug in real time.
-    show_text_screen(t("system_information"), lines, refresh_fn=collect, refresh_ms=2000)
+    """Read hardware capacities passively and show the recovery build and Web URLs."""
+    info = get_recovery_info()
+    memory = get_memory_info()
+    endpoints = get_web_endpoints()
+    lines = [t('device'), info.get('model') or '--', '', t('tui_memory'),
+           'RAM: ' + _capacity(memory['ram_total'])+'    eMMC: ' + _capacity(memory['emmc_total']),
+           '', t('tui_build'), info.get('firmware') or '--', '', t('tui_web')]
+    for endpoint in endpoints:
+        kind = {'ethernet': 'Ethernet', 'wifi': 'WiFi'}.get(endpoint['kind'])
+        label = '{} ({})'.format(kind, endpoint['interface']) if kind else endpoint['interface']
+        lines.append('{}: {}'.format(label, endpoint['url']))
+    if not endpoints:
+        lines.append(t('tui_no_address'))
+    show_text_screen(t('tui_info'), lines)
 
 
 def settings_menu():
-    """menuconfig-style runtime settings (reset on reboot)."""
-    items = [
-        {
-            'type': 'choice',
-            'label': t('settings_language'),
-            'choices': [('en', 'English'), ('ru', 'Русский')],
-            'get': app_locale.get_language,
-            'set': app_locale.set_language,
-            'help': "Interface language for the console application.\n"
-                    "Applies immediately to all menus.",
-        },
-        {
-            'type': 'action',
-            'label': t('reboot_now'),
-            'action': 'reboot',
-        },
-    ]
-    action = show_settings_screen(t("settings"), items)
-    if action == 'reboot' and show_confirm_screen(
-            t('reboot_now'), [t('reboot_confirm')],
-            yes_label=t('reboot_now'), no_label=t('cancel')):
-        result, out = show_wait_screen(t('reboot_now'), t('rebooting'),
-                                       run_command, ['reboot'], check=False)
-        if isinstance(result, Exception) or result[0] != 0:
-            show_text_screen(t('reboot_now'), _output_lines(out) or [str(result)])
+    """Apply runtime language changes and group the two guarded power actions."""
+    while True:
+        language = 'English' if app_locale.get_language() == 'en' else 'Русский'
+        choice = show_menu(t('settings'), [t('settings_language')+': ' + language, t('tui_power')])
+        if not choice:
+            return
+        if choice == 1:
+            selected = show_menu(t('settings_language'), ['English', 'Русский'])
+            if selected:
+                app_locale.set_language(('en', 'ru')[selected - 1])
+        elif choice == 2:
+            power = show_menu(t('tui_power'), [t('tui_reboot'), t('tui_poweroff')])
+            if power:
+                _power_action('reboot' if power == 1 else 'poweroff')
 
 
 def main_menu():
-    """Main menu loop"""
-    web_port = 8124
-
-    def title_fn():
-        # Live Web UI address in the title (refreshes ~2s), so the IP appears/
-        # updates as the network comes up without leaving the menu.
-        title = t("main_menu")
-        if check_web_app_status("localhost", web_port):
-            local_ip = get_local_ip() or "localhost"
-            title = f"{title} · http://{local_ip}:{web_port}"
-        return title
-
+    """Open the approved Classic menu with a read-only, inexpensive address header."""
+    info = get_recovery_info()
+    model = info.get('model') or config.JETHOME_DEVICE_NAME
+    if model.startswith('JetHome '):
+        model = model[8:]
+    def address():
+        urls = get_web_urls()
+        return 'IP ' + urls[0].split('://', 1)[-1].rsplit(':', 1)[0] if urls else t('tui_no_address')
+    tui.configure_header((info.get('firmware') or 'jrescue')+' | ' + model, address)
     while True:
-        options = [
-            t("network_setup"),
-            t("flash_image"),
-            t("system_info"),
-            t("settings"),
-        ]
-
-        choice = show_menu(title_fn(), options, title_fn=title_fn)
-
-        if choice == 0:
-            continue
-
-        elif choice == 1:
-            network_setup_menu()
-
-        elif choice == 2:
-            flash_image_menu()
-
-        elif choice == 3:
-            system_info_menu()
-
-        elif choice == 4:
-            settings_menu()
+        choice = show_menu(t('tui_main'), [t('tui_flash'), t('tui_network'), t('tui_info'), t('settings')], main=True)
+        if choice:
+            (flash_image_menu, network_setup_menu, system_info_menu, settings_menu)[choice - 1]()
 
 
 def cleanup_old_temp_dir():
@@ -501,7 +378,7 @@ def main():
         cleanup_old_temp_dir()
 
         # Straight into the curses main menu — no plain-text banner
-        main_menu()
+        run_console_ui(main_menu)
 
     except KeyboardInterrupt:
         print("\n")

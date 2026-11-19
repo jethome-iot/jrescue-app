@@ -31,13 +31,28 @@ IFF_UP = 0x1
 IFF_LOOPBACK = 0x8
 
 
-def get_web_urls() -> List[str]:
+def _web_interface_kind(name, sysfs_root):
+    """Identify physical links locally, including WiFi not managed by NM."""
+    path = os.path.join(sysfs_root, name)
+    if os.path.isdir(os.path.join(path, 'wireless')) or os.path.exists(os.path.join(path, 'phy80211')):
+        return 'wifi'
+    if os.path.exists(os.path.join(path, 'device')):
+        try:
+            with open(os.path.join(path, 'type'), encoding='ascii') as source:
+                if source.read().strip() == '1':
+                    return 'ethernet'
+        except (OSError, ValueError):
+            pass
+    return 'other'
+
+
+def get_web_endpoints(sysfs_root='/sys/class/net') -> List[dict]:
     """Read current primary IPv4 addresses without network traffic or NM calls.
 
     Query the kernel because the setup AP deliberately leaves NetworkManager's
     control. Never invent an AP address when it is not actually configured.
     """
-    urls = []
+    endpoints = []
     try:
         interfaces = socket.if_nameindex()
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
@@ -58,13 +73,18 @@ def get_web_urls() -> List[str]:
                             or int(address) == 0xffffffff):
                         continue
                     url = 'http://{}:{}'.format(address, config.WEB_SERVER_PORT)
-                    if url not in urls:
-                        urls.append(url)
+                    endpoints.append({'interface': name, 'kind': _web_interface_kind(name, sysfs_root),
+                                      'url': url})
                 except (OSError, ValueError, struct.error):
                     continue
     except OSError:
         pass
-    return urls
+    return endpoints
+
+
+def get_web_urls() -> List[str]:
+    """Keep the existing URL-only API for OLED and the console header."""
+    return list(dict.fromkeys(endpoint['url'] for endpoint in get_web_endpoints()))
 
 
 def _nmcli_split(line: str) -> List[str]:

@@ -237,50 +237,18 @@ class USBHandler:
         return images
 
 def list_usb_devices_interactive() -> Optional[dict]:
-    """
-    Interactive function to list and select USB device
-    Uses arrow keys navigation (like Midnight Commander)
-
-    Returns:
-        Selected device dict or None
-    """
-    from utils import show_text_screen
-
+    """Discover USB sources in a worker and choose one in an adaptive table."""
+    from translations import t
+    from utils import show_wait_screen, show_text_screen, show_table_menu
     handler = USBHandler()
-
-    devices = handler.detect_usb_devices()
-
-    if not devices:
-        show_text_screen("USB", [
-            "No USB devices found.",
-            "Please insert a USB drive and try again.",
-        ])
+    devices, output = show_wait_screen('USB', t('tui_wait'), handler.detect_usb_devices)
+    if isinstance(devices, Exception) or not devices:
+        show_text_screen('USB', [t('tui_no_usb')])
         return None
-
     if len(devices) == 1:
         return devices[0]
-    else:
-        # Multiple devices - show interactive menu
-        # Build menu options
-        menu_options = []
-        menu_options.append("← Back / Cancel")
-
-        for device in devices:
-            vendor_model = f"{device['vendor']} {device['model']}".strip()
-            mounted = f" [Mounted: {device['mountpoint']}]" if device['mountpoint'] else ""
-            menu_line = f"{device['device']} | {device['size']} | {vendor_model}{mounted}"
-            menu_options.append(menu_line)
-
-        choice = show_menu("Select USB Device", menu_options)
-
-        # choice == 0 or 1 means cancelled or "Back" selected
-        if choice == 0 or choice == 1:
-            return None
-
-        # choice >= 2 means a device was selected
-        device_index = choice - 2
-        if 0 <= device_index < len(devices):
-            return devices[device_index]
-
-        return None
-
+    rows = [(device['device'], device.get('size', '--'),
+             (device.get('vendor', '')+' '+device.get('model', '')).strip())
+            for device in devices]
+    choice = show_table_menu('USB', [t('tui_target'), t('tui_size'), t('tui_model')], rows)
+    return devices[choice-1] if 1 <= choice <= len(devices) else None
