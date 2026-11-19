@@ -12,7 +12,7 @@ from language import t
 # Add core/ to path to reuse modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 
-from network import get_network_handler, get_internet_status
+from network import get_network_handler
 from network_control import restart_network
 import time
 
@@ -104,7 +104,10 @@ def wifi_setup(menu):
     import ap as ap_module
     ap_handler = ap_module.get_ap_handler()
     if ap_handler.is_ap_active():
-        menu.run_working(t("wifi_title"), t("ap_stopping"), ap_handler.release_radio)
+        try:
+            menu.run_working(t("wifi_title"), t("ap_stopping"), ap_handler.release_radio)
+        except (OSError, RuntimeError):
+            return -1 if _wifi_error(menu, code='radio_busy') == -1 else None
 
     networks = menu.run_working(t("wifi_title"), t("wifi_scanning"), handler.scan_wifi)
 
@@ -202,31 +205,19 @@ def network_status(menu):
         return menu.show_message(t('net_status'), t('net_unavailable'))
     selected = 0
     while True:
-        devices, summary = menu.run_working(t('net_status'), t('wait'), _network_snapshot, handler)
+        devices = menu.run_working(t('net_status'), t('wait'), handler.get_network_status)
         if not devices:
             return menu.show_message(t('net_status'), t('net_unavailable') if handler.last_error
                                      else t('net_no_interfaces'))
-        pages = network_status_pages(devices, summary, menu.display.renderer)
+        pages = network_status_pages(devices)
         action, selected = menu.show_network_pages(pages, initial=selected)
         if action is not True:
             return action
 
 
-def _network_snapshot(handler):
-    """Read interface reachability without DNS; formatting stays on the UI thread."""
-    devices = handler.get_network_status(check_internet=True)
-    return devices, get_internet_status(devices, check_dns=False)
-
-
-def network_status_pages(devices, summary, painter):
-    """Put Internet first, followed by one automatically scrolling page per adapter."""
-    internet = summary.get('internet')
-    pages = [{'title': t('net_internet_title'),
-              'value': t('net_internet_yes' if internet is True else
-                         'net_internet_no' if internet is False else 'net_internet_unknown'),
-              'detail': ''}]
-    pages.extend(network_status_page(device) for device in devices)
-    return pages
+def network_status_pages(devices):
+    """Keep one automatically scrolling page per detected Ethernet/WiFi adapter."""
+    return [network_status_page(device) for device in devices]
 
 
 def restart_confirmation():

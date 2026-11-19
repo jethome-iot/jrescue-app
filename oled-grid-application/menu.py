@@ -412,20 +412,44 @@ class Menu:
 
     def input_text(self, title, prompt="", initial=""):
         """Edit a password using the full QWERTY keyboard and explicit mode keys."""
-        from keyboard_layout import KeyboardState
+        from keyboard_layout import KeyboardState, DirectionRepeat
 
         state = KeyboardState(initial)
+        repeat = DirectionRepeat()
         directions = {KEY_UP: 'up', KEY_DOWN: 'down', KEY_LEFT: 'left', KEY_RIGHT: 'right'}
         blink_started = time.monotonic()
+        dirty, cursor_visible = True, None
         while True:
-            phase = (time.monotonic()-blink_started)/0.5
-            self.display.draw_keyboard(state.value, state.rows, state.row, state.col,
-                                       t('keyboard_password'), state.shift, state=state,
-                                       cursor_visible=int(phase) % 2 == 0)
-            key = self.idle.wait_for_key(timeout=max(0.01, (1-phase % 1)*0.5))
+            now = time.monotonic()
+            if repeat.key is not None:
+                if self.idle.sleeping:
+                    repeat.stop()
+                else:
+                    key = repeat.poll(self.input.get_pressed_keys(), now)
+                    if key is not None:
+                        state.move(directions[key])
+                        self.idle.activity()
+                        blink_started, dirty = now, True
+            phase = (now-blink_started)/0.5
+            visible = int(phase) % 2 == 0
+            if (dirty or visible != cursor_visible) and not self.idle.sleeping:
+                self.display.draw_keyboard(state.value, state.rows, state.row, state.col,
+                                           t('keyboard_password'), state.shift, state=state,
+                                           cursor_visible=visible)
+                dirty, cursor_visible = False, visible
+            timeout = max(0.01, (1-phase % 1)*0.5)
+            if repeat.key is not None:
+                timeout = min(timeout, repeat.timeout(now))
+            key = self.idle.wait_for_key(timeout=timeout)
             if key is None:
                 continue
             blink_started = time.monotonic()
+            dirty = True
+            if key in directions:
+                state.move(directions[key])
+                repeat.press(key, blink_started)
+                continue
+            repeat.stop()
             if key == KEY_ENTER:
                 if state.activate():
                     return state.value or None
@@ -433,8 +457,6 @@ class Menu:
                 return None
             elif key == KEY_HOME:
                 return -1
-            elif key in directions:
-                state.move(directions[key])
 
     def select_from_list(self, title, items, show_index=True, show_counter=True, icons=None,
                          compact=False, initial_index=0):

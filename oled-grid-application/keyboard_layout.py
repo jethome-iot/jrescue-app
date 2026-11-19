@@ -88,12 +88,11 @@ class KeyboardState:
         rows = self.rows
         if direction in ('left', 'right'):
             step = -1 if direction == 'left' else 1
-            col = self.col+step
-            while 0 <= col < len(rows[self.row]):
+            for distance in range(1, len(rows[self.row])+1):
+                col = (self.col+step*distance) % len(rows[self.row])
                 if rows[self.row][col] is not None:
                     self.col = col
                     break
-                col += step
         else:
             target = self.row+(-1 if direction == 'up' else 1)
             if not 0 <= target < len(rows):
@@ -135,3 +134,38 @@ class KeyboardState:
             if self.shift == 1:
                 self.shift = 0
         return False
+
+
+class DirectionRepeat:
+    """Repeat a freshly pressed stick direction using the current physical state."""
+
+    def __init__(self):
+        self.key = None
+        self.started = self.next_at = 0
+
+    def press(self, key, now):
+        """Move once immediately; a short tap must never turn into a repeat."""
+        self.key = key
+        self.started, self.next_at = now, now+0.4
+
+    def stop(self):
+        """Require another real press after release, cancellation or another key."""
+        self.key = None
+
+    def poll(self, pressed, now):
+        """Accelerate held directions without trusting kernel autorepeat events."""
+        if self.key is None:
+            return None
+        if self.key not in pressed:
+            self.stop()
+            return None
+        if now < self.next_at:
+            return None
+        elapsed = now-self.started
+        delay = 0.05 if elapsed >= 2.4 else 0.08 if elapsed >= 1.2 else 0.16
+        self.next_at = now+delay
+        return self.key
+
+    def timeout(self, now):
+        """Poll releases promptly and wake exactly for the next repeated movement."""
+        return min(0.04, max(0.01, self.next_at-now))
