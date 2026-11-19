@@ -521,7 +521,7 @@ For issues and questions:
 
 ## 📝 Version
 
-**Current version:** v2.2.1
+**Current version:** v2.2.2
 
 ## 🎯 Project Structure
 
