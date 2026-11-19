@@ -32,7 +32,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import config
 from utils import run_command
-from network_control import NetworkBusyError, network_change_lock
+from network_control import NetworkBusyError, get_setup_ap_interface, network_change_lock
 
 try:
     # Reuse the terse-nmcli splitter (handles escaped ':' in SSIDs).
@@ -157,6 +157,8 @@ class APHandler:
         retries can trip the limit — and a refused start would leave the user
         with no AP and no UI at all.
         """
+        if not self._wifi_iface():
+            return False
         ret, _, err = run_command(['systemctl', 'start', config.AP_SERVICE],
                                   check=False, timeout=30)
         if ret == 0:
@@ -192,8 +194,10 @@ class APHandler:
         """
         if not self.is_ap_active():
             return False
-        self.stop_ap()
-        self._wait_wifi_managed(self._wifi_iface(), timeout)
+        iface = self._wifi_iface()
+        if not iface or not self.stop_ap():
+            raise RuntimeError('Setup AP radio could not be released')
+        self._wait_wifi_managed(iface, timeout)
         self.phase = PHASE_IDLE
         return True
 
@@ -327,33 +331,8 @@ class APHandler:
 
     # ----------------------------------------------------------------- helpers
     def _wifi_iface(self) -> Optional[str]:
-        """The Wi-Fi netdev name (auto-detected; no hardcoded wlan0).
-
-        Prefer a station-capable (`type managed`) vif from `iw dev` so a leftover
-        P2P-device/monitor/AP vif is never handed to the STA connect; fall back to
-        the nmcli wifi device (which also lists the radio while it's an AP).
-        """
-        ret, out, _ = run_command(['iw', 'dev'], check=False, timeout=10)
-        if ret == 0 and out:
-            name = None
-            for line in out.split('\n'):
-                s = line.strip()
-                if s.startswith('Interface '):
-                    name = s.split(None, 1)[1].strip()
-                elif s.startswith('type ') and name:
-                    if s.split(None, 1)[1].strip() == 'managed':
-                        return name
-                    name = None  # not a station vif — keep looking
-        # Fallback via nmcli (lists the wifi device even while it's an AP).
-        ret, out, _ = run_command(
-            ['nmcli', '-t', '-f', 'DEVICE,TYPE', 'device', 'status'],
-            check=False, timeout=15)
-        if ret == 0 and out:
-            for line in out.strip().split('\n'):
-                fields = _nmcli_split(line)
-                if len(fields) >= 2 and fields[1] == 'wifi':
-                    return fields[0]
-        return None
+        """Keep AP startup, portal handoff and rollback on the native radio."""
+        return get_setup_ap_interface()
 
     def _wait_wifi_managed(self, iface: Optional[str], timeout: float = 10.0) -> None:
         """After stopping the AP, wait for NM to re-own the Wi-Fi device.
@@ -510,10 +489,20 @@ class APHandler:
                 self._save_state()
                 return {'ok': False, 'ip': None, 'error': reason, 'error_code': code}
 
+            # Resolve before stopping: another managed USB radio must not replace
+            # the AP device in the portal's association attempt.
+            iface = self._wifi_iface()
+            if not iface:
+                reason = "native setup AP adapter unavailable"
+                self.last_error, self.last_error_code = reason, ERR_RADIO_BUSY
+                emit(PHASE_FAILED, reason)
+                self._save_state()
+                return {'ok': False, 'ip': None, 'error': reason, 'error_code': ERR_RADIO_BUSY}
+
             # 1. AP_DOWN — release the single radio. From here the phone is gone.
             emit(PHASE_STOPPING_AP, "Stopping access point")
-            self.stop_ap()
-            iface = self._wifi_iface()
+            if not self.stop_ap():
+                return self._rollback(ssid, "could not stop access point", ERR_RADIO_BUSY, emit)
             self._wait_wifi_managed(iface)
 
             # 2. STA_TRYING — make the SSID visible first (nmcli does not scan),
@@ -523,8 +512,7 @@ class APHandler:
             cmd = ['nmcli', '--wait', '35', 'device', 'wifi', 'connect', ssid]
             if password:
                 cmd += ['password', password]
-            if iface:
-                cmd += ['ifname', iface]
+            cmd += ['ifname', iface]
             started = time.time()
             ret, out, err = run_command(cmd, check=False, timeout=50)
             if ret != 0:
@@ -538,8 +526,6 @@ class APHandler:
 
             # 3. VERIFYING — real connectivity is an IP AND a usable default route.
             emit(PHASE_VERIFYING, "Verifying connection")
-            if not iface:
-                iface = self._wifi_iface()  # device may have finished enumerating
             ip = self._wait_for_ip(iface)
             if not ip:
                 return self._rollback(ssid, "joined but got no IP address",

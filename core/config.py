@@ -87,6 +87,7 @@ NETWORK_DNS_TIMEOUT = 3
 NETWORK_CONTROL_LOCK = '/run/jrescue/network-control.lock'
 
 AP_SERVICE = "jrescue-ap.service"
+AP_INTERFACE = "wifi0"  # Setup AP only; STA interfaces remain auto-detected.
 AP_ADDR = "10.42.0.1"
 AP_URL = "http://10.42.0.1"
 CAPTIVE_PORT = 80

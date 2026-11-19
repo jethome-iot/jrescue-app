@@ -53,6 +53,11 @@ def _ap_active():
     return code == 0
 
 
+def get_setup_ap_interface():
+    """Use wifi0 exclusively, without udev markers or another adapter fallback."""
+    return config.AP_INTERFACE if os.path.isdir('/sys/class/net/'+config.AP_INTERFACE) else None
+
+
 def _devices():
     """Discover device names without relying on wlan0 or eth0 fallbacks."""
     from network import _nmcli_split
@@ -111,6 +116,9 @@ def _restart_links(kind):
 def _restart_manager():
     """Restore AP ownership after NM restarts and reapply previously active UUIDs."""
     ap_active = _ap_active()
+    ap_iface = get_setup_ap_interface() if ap_active else None
+    if ap_active and not ap_iface:
+        raise RuntimeError('unavailable')
     profiles = []
     try:
         devices = _devices()
@@ -118,7 +126,7 @@ def _restart_manager():
         # A stopped/wedged NetworkManager is itself a reason to use this action.
         devices = []
     for name, kind in devices:
-        if ap_active and kind == 'wifi':
+        if ap_active and name == ap_iface:
             continue
         try:
             profiles.append((name, _profile(name)))
