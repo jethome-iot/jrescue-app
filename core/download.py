@@ -57,7 +57,7 @@ class DownloadHandler:
 
     def fetch_jethome_images(self) -> Optional[List[dict]]:
         """
-        Fetch available images from JetHome API
+        Fetch compatible latest and historical images from the JetHome API.
 
         Returns:
             List of image dicts or None if failed
@@ -86,8 +86,20 @@ class DownloadHandler:
             if expected and api_platform and api_platform != expected:
                 raise ValueError(f"API platform '{api_platform}' does not match '{expected}'")
 
+            # Older servers expose only latest_firmware. The extended API groups
+            # historical releases by firmware type, with the same entry format.
+            older = data.get('older_firmware', {})
+            if not isinstance(older, dict):
+                raise ValueError("Invalid API response: 'older_firmware' must be an object")
+            releases = list(firmware_types.items())
+            for fw_type, versions in older.items():
+                if not isinstance(versions, list):
+                    raise ValueError("Invalid API response: historical releases must be a list")
+                releases.extend((fw_type, fw_data) for fw_data in versions)
+
             images = []
-            for fw_type, fw_data in firmware_types.items():
+            seen = set()
+            for fw_type, fw_data in releases:
                 # Only SDCard is a raw disk image. Burn containers and RAUC
                 # bundles are separate API entries and cannot go to this writer.
                 sdcard = fw_data.get('images', {}).get('sdcard')
@@ -100,6 +112,10 @@ class DownloadHandler:
                     continue
                 size = int(sdcard.get('filesize') or 0)
                 version = str(fw_data['version'])
+                identity = (fw_type, version)
+                if identity in seen:
+                    continue
+                seen.add(identity)
                 date = fw_data.get('date') or 'unknown'
                 images.append({
                     'name': f"{fw_type} v{version}",
