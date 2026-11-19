@@ -62,6 +62,8 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   layer was removed. NM runs its own DHCP.
 - **Interfaces are auto-detected** (nmcli device enumeration). Do **not** hardcode
   `wlan0` / `eth0`. `config.WIFI_INTERFACE` / `ETHERNET_INTERFACE` are fallbacks only.
+  Setup AP is the explicit exception: `config.AP_INTERFACE = "wifi0"`, with no
+  automatic adapter selection or udev eligibility marker.
 - **Board is auto-detected** in `core/config.py: detect_board()`, in priority order:
   env `JETHOME_DEVICE` / `JETHOME_PLATFORM` (manual override) → env `BOARD` /
   `BOARD_NAME` set by the recovery system (`BOARD=jethub-j100`) →
@@ -188,6 +190,13 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   insertion cursor and DOWN returns to the same selected key. ENTER while the
   field is focused returns to the keys; only the explicit OK key submits.
   Insert/delete acts at the cursor and preserves hidden suffixes and spaces.
+  Keyboard LEFT/RIGHT wrap within the same row, skipping invisible slots;
+  password-field cursor movement still clamps at the text boundaries. A fresh
+  direction press arms `DirectionRepeat`: 400ms initial delay, then 160ms repeats,
+  80ms after 1.2s held and 50ms after 2.4s. Physical key state controls repetition;
+  release stops it, another direction restarts its delay. ENTER never repeats.
+  Preserve IdleScreen wake consumption; held wake keys cannot arm repetition.
+  Only keyboard navigation/cursor use this controller, never action confirmations.
   The field is unfilled; arrows indicate hidden input on either side, without
   changing the actual password. Selecting a secured SSID opens this editor
   directly, without an extra NO/YES step. Back/Home still cancel safely.
@@ -197,6 +206,13 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   eMMC label on Flash and with the Wi-Fi password keyboard retained.
   The user approved restoring the 2×2 grid and requested more legible icons.
   Preview scripts are local development aids and are not part of the repository.
+  TUI previews follow the same latest-only rule in `~/jrescue-tui-previews/`.
+  Publish only the PNG/GIF files presented in the latest proposal, replacing the
+  previous published media set every time. Do not republish the full development
+  gallery or retain old overview images alongside the new proposal. Keep source
+  frames and working variants in `/tmp`; README/index/manifest must reference
+  only the current published set. The local `tools/publish_tui_previews.py`
+  publisher takes an explicit media list and removes superseded generated files.
   **Keep only the latest generated previews** in `~/jrescue-oled-previews/`:
   the user explicitly requested deleting previous versions because they were
   hard to find. Publish one flat current set in this directory and remove
@@ -280,11 +296,11 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   Ethernet status: every detected Ethernet and Wi-Fi device has a page, including
   disconnected devices. UP/DOWN pages without wrapping, numeric counters show
   the current page/total at the top right, ENTER refreshes while preserving the selection,
-  Back/Home return safely, and Left/Right are ignored. Internet is the first page.
+  Back/Home return safely, and Left/Right are ignored. Only adapter pages are
+  shown: normally Ethernet `1/2` and WiFi `2/2`, without an Internet summary.
   Ethernet has two rows (IP, Status); WiFi has three (Status, SSID, IP), with
-  regular 14px text and no field selection. Successful interface and Internet
-  states show `OK`; errors retain a cause. Interface Status describes its local
-  connection, separately from Internet reachability. All assigned IPv4/IPv6
+  regular 14px text and no field selection. Successful interface states show
+  `OK`; errors retain a cause. Status describes the local connection. All assigned IPv4/IPv6
   addresses stay in one IP row, separated by ` | `, including scoped link-local
   IPv6. There is no separate IPv6 or SSID page. Long values scroll automatically
   one row at a time: 2px per 100ms, with 1.4s pauses at the start/end. Labels and
@@ -293,16 +309,8 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   runs through timed UI-thread waits, never resets inactivity and does not draw
   while the display sleeps. Status viewing never scans or changes networking.
   SSIDs come from the active connection UUID's wireless.ssid, not its profile name.
-  `get_network_status(check_internet=True)` checks connected, addressed devices
-  independently, using TCP/443 to `NETWORK_STATUS_TARGETS` / `NETWORK_STATUS_IPV6_TARGETS` with a 1.5s timeout
-  per target and sockets bound to both the interface (`SO_BINDTODEVICE`) and its
-  source address. IPv4 and routable IPv6 are supported; link-local-only Internet
-  reachability remains unknown. Devices are checked in parallel (up to four workers). Failure to
-  bind or insufficient permissions means unknown, never an unbound fallback.
-  This is external TCP reachability, not a DNS/TLS/captive-portal test, and it
-  does not gate downloads. Core's default snapshot makes no external probes.
-  OLED calls `get_internet_status(..., check_dns=False)` to summarize those
-  probes without starting a DNS resolver child. Only opening/Enter refreshes data.
+  OLED calls `get_network_status()` with its default local-only behavior; it
+  does not run Internet/TCP/DNS probes. Only opening/Enter refreshes data.
   Restart network (`25-network-restart.png` / `26-network-restart.gif`) opens
   one fresh 3s hold directly, without a WiFi/Ethernet/NM chooser. The warning is
   `Connections / will drop!`, or three Russian rows `Все / соединения / прервутся!`.
@@ -325,19 +333,101 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   body rows, never behind an SSID that could push the cause off-screen. Only
   credential/auth failures reopen the password editor; other failures return
   to the network menu. Connection commands have bounded timeouts.
-  The console's existing Ethernet status remains available separately.
-- **The console UI is curses-only, including waits and progress.** Menus/dialogs:
-  `show_menu`, `show_horizontal_menu`, `input_dialog`, `confirm_action`; screens:
-  `show_text_screen` (scrollable report), `show_wait_screen` (spinner around a
-  blocking call, captures its stdout), `show_progress_screen` (bar; runs a
-  `worker(progress)` in a thread), `show_confirm_screen` (info + NO/YES),
-  `show_settings_screen` (menuconfig-style; declarative bool/choice/string/int/action
-  items with get/set callables — runtime-only, resets on reboot). All in
-  `core/utils.py`; Python `curses` is guaranteed via `select BR2_PACKAGE_PYTHON3_CURSES`.
-  Esc = cancel. Do NOT add plain `print`/`press_enter` steps between curses screens —
-  they flash and corrupt the flow; route long operations through
-  `progress_cb` (supported by `download_file` and `flash_image`/`pv -n`) or a wait
-  screen, and show captured output via `show_text_screen`.
+  The console shows all WiFi/Ethernet adapters together, with local status,
+  full SSIDs and IPv4/IPv6 addresses, without Internet/DNS probes.
+  Left/Right or Tab immediately changes Network tab contents: Status, the WiFi
+  list, or the restart tab with a dedicated explanation of restarting
+  NetworkManager, restoring connections and retaining profiles/passwords. The
+  restart tab shows the connection-drop warning instead of adapter status.
+  Enter on an SSID
+  opens credentials; Enter on Restart opens its compact confirmation;
+  merely visiting tabs never connects, restarts services or releases the AP.
+  While the AP is active, show its saved scan; release it only after explicit
+  WiFi submission. Merely highlighting Restart never opens a dialog or captures
+  tab-navigation keys as confirmation input. Restart uses a centered 64×11
+  OK/Cancel dialog with Cancel
+  selected initially. Within that dialog arrows/Tab select buttons; only explicit
+  OK with the entire warning visible starts the restart. Esc/Cancel returns to
+  the previously visited Status/WiFi tab. A resize hiding the warning resets the
+  selection to Cancel. No RESTART token is required.
+- **The console uses the approved Classic curses theme with menuconfig layout.** `core/tui.py` owns
+  terminal-cell rendering and widgets; `core/utils.py` provides the public screen
+  facade and joined operation workers. Keep one curses session through
+  `run_console_ui`, a blue background, light dialogs and regular text. The main
+  palette uses fixed 256-color entries (navy 18 / `#000087`, gray 250 / `#bcbcbc`)
+  so the user's terminal theme cannot turn the background bright blue. Preview
+  RGB values come from `tui.PALETTE_RGB`; never hardcode a different preview theme.
+  Before starting curses, the service's `TERM=linux` default on a serial/PTY
+  connection is changed to `xterm-256color` when available. Preserve actual Linux
+  VTs, explicit terminal types, and the basic-color/monochrome fallbacks. Do not
+  redefine the user's ANSI palette. Parent screens, including the main menu, fill
+  the terminal with a gray panel and narrow blue margins. At normal sizes the
+  panel is `columns - 5` by `rows - 4`, with a black shadow, a thin dark border
+  and a centered regular title. The main list stays centered within that panel,
+  with submenu arrows and a thin divider below its description; do not restore
+  the fixed 54×14 main dialog. Windows grow beyond 80×24. Resize preserves
+  selection; text wraps by terminal cells and scrolls. All menu lists, Info,
+  network tabs/status/tables, messages and progress use horizontally centered
+  content blocks with left-aligned text/columns inside. Block width comes from
+  the data and available terminal width, without a fixed 80-column cap. Tables
+  measure all rows/details so changing the selection does not shift the block.
+  Runtime progress and preview frames share `content_width()` geometry.
+  Keep the renderer's printable-ASCII fast paths and bounded per-glyph width
+  cache: full-screen gray fills must not run Unicode measurement for every
+  space on every key press. Preserve control sanitizing, combining marks and
+  wide-glyph cell alignment; performance fixes must keep rendered cells identical.
+  `Frame.paint` reuses unchanged rows on the same terminal and invalidates its
+  snapshot on resize, failed paint, session exit and `refresh=False` base-frame
+  drawing. The latter is required because operation progress writes directly to
+  curses after painting its base; never reuse a snapshot across those writes.
+  Approved compact modals keep the light gray panel and black shadow; their
+  inactive parent uses gray 245 (`#8a8a8a`), with a muted gray 240 selection.
+  Password input uses black text on white, including the complete padded field.
+  Backdrop dimming never mutates the parent; closing a modal restores its colors.
+  Basic-color and monochrome terminals retain visible input/selection fallbacks.
+  Compact geometry remains:
+  Flash confirmation is at most 72×14, Restart network 64×11, Reboot/Power off
+  54×10, and WiFi passwords
+  56×11 terminal cells. They stay compact on large terminals. Password entry
+  retains masked insertion/deletion, cursor movement and hidden suffixes, with
+  centered OK/Cancel buttons; Tab switches buttons and Esc/Cancel discards input.
+  The cached WiFi tab rebuilds the backdrop on resize without scans/NM calls.
+  No new runtime dependency or font installation is needed. ASCII borders are
+  selected by `JRESCUE_TUI_ASCII=1` or a non-UTF-8 encoding; monochrome uses reverse
+  video for selection. Python curses is guaranteed by
+  `select BR2_PACKAGE_PYTHON3_CURSES`.
+  An empty successful firmware catalog is distinct from an API failure. Explain
+  that latest releases lack sdcard images; do not claim network configuration is
+  required. In particular, D3's 18.4 catalog currently has only burn/RAUC, while
+  the site's 18.3 release has sdcard. Never invent a download URL/version or parse
+  the HTML catalog as a fallback for the API-only image source.
+  Esc = back/cancel; F1 = brief help. Flash, Restart network, Reboot and Power off
+  use compact OK/Cancel dialogs, defaulting to Cancel; the user explicitly
+  removed FLASH/RESTART/REBOOT/POWEROFF tokens. Flash must show the entire erase
+  warning, image filename, size and target before explicit OK can start a writer.
+  Hidden warnings,
+  input/display failure and undersized windows never approve an action. After a
+  resize hides a confirmation, returning to a larger size leaves Cancel selected.
+  Settings groups language and Reboot & off; power requests use
+  `systemctl --no-block` and retain a passive pending screen until systemd stops
+  the application. Info shows model, total RAM/eMMC, recovery build and Web URLs.
+  Console Web URLs retain their interface identity via `get_web_endpoints()`:
+  `Ethernet (end0): http://...`, `WiFi (wifi0): http://...`; other/virtual devices
+  use their interface name without inventing a link type. Names are detected,
+  not hardcoded. Classification reads local sysfs wireless/phy80211 and physical
+  Ethernet metadata, including the NM-unmanaged AP. URL discovery remains local
+  kernel ioctls without scans, NM calls or traffic. `get_web_urls()` preserves
+  the existing unique URL-only list for OLED and the console header.
+  Menus/dialogs include `show_menu`, `show_table_menu`, `show_horizontal_menu`,
+  `input_dialog`, `show_action_confirmation`, `show_compact_confirmation`, `show_network_screen` and
+  `show_text_screen`. `show_settings_screen` retains the declarative
+  bool/choice/string/int/action API for runtime-only settings.
+  Do not add plain `print`/`press_enter` between screens. Use `show_wait_screen`
+  for blocking calls and `show_progress_screen` with `worker(progress)` for
+  downloads/writes; captured output belongs in `show_text_screen`. Only downloads
+  receive a cancellation event. A terminal failure cancels and joins downloads,
+  while writes always join exactly one worker and never retry it. Cleanup of RAM
+  downloads or USB sources completes before errors or reboot prompts.
 - **Version lives in the git tag only.** `core/config.py: APP_VERSION = "dev"` in
   checkouts; the release workflow (`.github/workflows/release.yml`) stamps the
   `vX.Y.Z` tag into the tarball on release and updates the README version line.
@@ -373,6 +463,22 @@ writing or truncating it. Both recovery slots stay intact; image data below
 - `SKIP_MOUNT_CHECK` must stay **`False`** in *every* `config.py` (shadowing — see above).
 
 ## Wi-Fi setup-AP provisioning
+
+Setup AP uses **only `wifi0`**, as explicitly requested. It does not require a
+udev eligibility marker or inspect USB attributes when selecting the AP interface.
+The J310 overlay's `10-jethub-wifi.link` names the native rtl8821cu adapter
+`wifi0` using VID:PID `0bda:c820` and the confirmed `ID_PATH`
+`platform-xhci-hcd-meson.1.auto-usb-0:1.1.2:1.2`. Its factory serial `123456`
+is not unique and is not matched. External adapters remain usable as NM stations.
+The app checks `/sys/class/net/wifi0` directly; the system scripts use
+`jrescue-ap-interface`, which returns `wifi0` only when present. Without `wifi0`
+the boot decision skips AP; direct service startup exits 77 without automatic
+retries. No code may substitute the first Wi-Fi interface or `wlan0`.
+AP up records interface and ifindex in `/run/jrescue/ap-interface`; down validates
+the recorded `wifi0` and ifindex before flushing IP/restoring NM ownership, so
+unplugging/reusing a name cannot affect a replacement. Network restart preserves
+external STA UUIDs even while the AP is active. The naming rule and system
+scripts require a rebuilt recovery image; app-only updates do not install them.
 
 Router-style first run: with no ethernet the device raises its own Wi-Fi AP; a
 phone joins it, a captive web portal collects the home Wi-Fi credentials, the

@@ -75,19 +75,50 @@ Persistent updates require including the release in the recovery image.
 
 **Location**: `/usr/lib/jrescue-app/console-application/`
 
-Terminal interface with arrow-key (curses) navigation and color output. In the
-recovery image it is started on the serial console by `jrescue-console@.service`.
+Classic curses interface with a blue background, light dialogs and regular text.
+In the recovery image it is started on the serial console by
+`jrescue-console@.service`. The main menu stays centered; working screens adapt
+to the available terminal size, including sizes larger than 80×24.
 
 ### Features
 
-- ✅ **Arrow Key Navigation** - Intuitive menu navigation with ↑↓ keys
-- ✅ **Color Output** - Visual highlighting for selected items
-- ✅ **Progress Bars** - Real-time progress with percentage and ETA
-- ✅ **Ethernet Status** - Interface, cable link and IP address
-- ✅ **Device Auto-Detection** - Finds all mmcblk devices automatically
-- ✅ **Smart Filtering** - Only shows flashable `sdcard` images
-- ✅ **Disposable Downloads** - Fresh downloads with automatic RAM cleanup
-- ✅ **Safety Checks** - Multiple confirmations before flashing
+- **Navigation** — arrow keys and Enter; Esc returns or cancels, F1 opens brief help.
+  Lists and reports scroll; long SSIDs and IPv6 addresses wrap without losing data.
+- **Layout** — menuconfig-style gray panels fill the terminal with narrow blue
+  margins. The main menu and inner screens expand on resize while preserving
+  the selected item. Lists, tables, Info, network pages and progress use centered
+  content blocks with left-aligned rows inside.
+- **Network** — local WiFi/Ethernet status, addresses and SSID; WiFi connection
+  with a masked password editor and classified errors; one NetworkManager restart
+  that attempts to restore the previously active profiles.
+  Left/Right or Tab immediately switches between Status, WiFi connect and Restart
+  network. Enter selects an SSID or opens the restart tab's compact OK/Cancel
+  dialog. Selecting the restart tab with arrows never opens its confirmation.
+  The restart tab explains the operation and warns about dropped connections.
+  Cancel returns to the previous tab. WiFi passwords use a compact masked editor
+  over the dimmed network list, with a white input field, OK/Cancel and cursor
+  editing. Confirmation dialogs also dim their background while open.
+  Viewing WiFi uses the cached scan while the setup AP is active; the AP is released
+  only after choosing a network and submitting its password.
+- **Flashing** — JetHome API `sdcard` images or USB files, explicit target
+  selection, progress, and automatic cleanup of downloaded images in RAM.
+  Esc cancels downloads; an active write always finishes before the screen closes.
+  If a latest firmware release contains only burn/RAUC files, it is excluded;
+  the empty catalog explains the missing sdcard image rather than suggesting
+  that an otherwise working network needs configuration.
+- **Confirmation** — Flash, Network restart, Reboot and Power off use compact
+  OK/Cancel dialogs with Cancel selected by default. Flash shows the erase
+  warning, image filename, size and target. All details must fit before explicit
+  OK can approve an action.
+- **Info and Settings** — device model, total RAM/eMMC capacity, recovery build
+  and current Web URLs labeled by adapter type and interface name; runtime
+  English/Russian selection and Reboot & off.
+- **Console compatibility** — regular terminal fonts, monochrome support and
+  ASCII borders with `JRESCUE_TUI_ASCII=1` or a non-UTF-8 terminal encoding.
+  On 256-color terminals the theme uses fixed dark blue and gray colors instead
+  of the emulator's ANSI palette. The recovery service's `TERM=linux` default is
+  adjusted to `xterm-256color` on serial/PTY connections when that entry exists;
+  actual Linux virtual consoles and explicitly selected terminal types are kept.
 
 ### Running Console Application
 
@@ -99,7 +130,7 @@ sudo ./main.py
 **Requirements:**
 - Python 3.14 with the `curses` module (as shipped in the recovery image; 3.7+ elsewhere)
 - Root privileges
-- Terminal with UTF-8 support
+- A curses-compatible terminal (UTF-8 recommended)
 - NetworkManager (nmcli) for networking
 
 ---
@@ -205,11 +236,19 @@ canceled through any frontend: the application waits for the writer to finish.
 Going back is done with the hardware BACK button (HOME jumps to the main menu).
 The OLED network actions are WiFi connect, Network status and Restart network. The setup AP is
 started automatically by the systemd boot decision; there is no Phone AP or
-manual AP start/stop item in the application. Network status shows every detected
+manual AP start/stop item in the application. AP always uses `wifi0`, without
+udev eligibility markers or automatic adapter selection. The board-specific
+systemd `.link` assigns this name to the native J310 radio (rtl8821cu, USB
+`0bda:c820`) at its confirmed onboard USB path. Without `wifi0`, AP stays off;
+other USB Wi-Fi adapters remain available to NetworkManager as stations.
+Startup, scan, portal handoff and cleanup use `wifi0`; cleanup also verifies ifindex.
+This requires the new Buildroot overlay, not just an app-only update.
+
+Network status shows every detected
 Ethernet and Wi-Fi adapter, including disconnected ones, on separate pages.
 UP/DOWN changes the page; the top right shows only its number/total.
 ENTER refreshes the status while keeping the current page; BACK/HOME returns.
-An Internet summary comes first. Ethernet shows IP and Status; WiFi shows
+Ethernet shows IP and Status; WiFi shows
 Status, SSID and IP together. Successful states show OK, while failures show
 their cause. Interface Status describes the local connection. All IPv4/IPv6
 addresses stay on the same adapter page, with scoped link-local IPv6 included.
@@ -228,13 +267,8 @@ AP is stopped and restored through systemd in a finally block. Restarts do not
 raise an inactive AP. A shared nonblocking lock coordinates the action with
 Wi-Fi connection and web provisioning; a busy action reports an error.
 
-Internet status uses bounded TCP/443 checks through each adapter separately,
-binding both the socket's interface and its source address. IPv4 and routable
-IPv6 use the configured public targets with a 1.5-second timeout per target; adapters are checked in
-parallel. An unavailable interface binding shows unknown status. These probes
-check external TCP reachability. The OLED screen skips DNS resolution and shows
-only Internet status. TLS and captive portals are not diagnosed.
-The indicator does not prevent image downloads.
+Network status has only adapter pages: normally Ethernet (1/2) and WiFi (2/2).
+It reads local NetworkManager/sysfs data without Internet, TCP or DNS probes.
 Wi-Fi SSID lists use 12px text; wrapped names use a 13px line pitch, keeping
 the lines close together without changing the typography of other menus.
 Other inner menus and two-line messages use a 20px line pitch instead of 25px.
@@ -298,6 +332,10 @@ UP from the top row focuses the password, LEFT/RIGHT moves the text cursor and
 scrolls the visible window, and DOWN returns to the selected key. Characters
 and backspace edit at the cursor without losing the hidden suffix or spaces.
 ENTER in the password field returns to the keyboard; only its OK key submits.
+Holding a stick direction repeats movement after 0.4 seconds and accelerates
+from 160ms to 80ms after 1.2 seconds, then 50ms after 2.4 seconds. LEFT/RIGHT
+wrap between the ends of the same keyboard row, skipping invisible keys. The
+password cursor stops at the text boundaries. Direction holds never type or submit.
 There is no eye button or separate password-view screen.
 
 #### Connecting Animation
@@ -498,7 +536,8 @@ jrescue-app/
 │   ├── flash.py                 # eMMC flashing (xz streaming, protected recovery region)
 │   ├── image_writer.py          # Protected streaming writer for every flash path
 │   ├── usb.py                   # USB device detection, mounting, image scan
-│   ├── utils.py                 # curses menus/dialogs, system info, helpers
+│   ├── utils.py                 # TUI facade, joined workers, system helpers
+│   ├── tui.py                   # Adaptive Classic curses renderer and widgets
 │   ├── system_info.py           # Device/build identity and total RAM/eMMC capacity
 │   └── translations.py          # i18n (EN/RU)
 │
