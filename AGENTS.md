@@ -380,6 +380,16 @@ oled-grid-application/    /dev/fb0 + Pillow + evdev (main.py, display.py, input.
   snapshot on resize, failed paint, session exit and `refresh=False` base-frame
   drawing. The latter is required because operation progress writes directly to
   curses after painting its base; never reuse a snapshot across those writes.
+  Resize and Ctrl+L also request a physical terminal clear through `clearok`.
+  On a physical serial console, `core/terminal_size.py` polls the emulator's
+  `CSI 18 t` character-size report once per second and updates both tty winsize
+  and curses on the UI thread. SSH/PTYS and Linux VTs keep native resize handling.
+  Size reports are consumed as protocol input, including fragmented/invalid
+  packets; they never become Escape, password characters or action approval.
+  Ordinary Escape and recognized direction keys retain their behavior. Preserve
+  caller wait deadlines and nonblocking operation progress; no reader thread or
+  alternate terminal input consumer is allowed. An emulator which ignores the
+  query retains its current size. Ctrl+L repaints without changing selection.
   Approved compact modals keep the light gray panel and black shadow; their
   inactive parent uses gray 245 (`#8a8a8a`), with a muted gray 240 selection.
   Password input uses black text on white, including the complete padded field.

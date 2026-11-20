@@ -119,6 +119,10 @@ to the available terminal size, including sizes larger than 80×24.
   of the emulator's ANSI palette. The recovery service's `TERM=linux` default is
   adjusted to `xterm-256color` on serial/PTY connections when that entry exists;
   actual Linux virtual consoles and explicitly selected terminal types are kept.
+  On UART (including `tio`), compatible emulators are queried for their character
+  dimensions so resizing the local window also resizes the recovery UI. SSH and
+  Linux virtual consoles use their native resize notifications. Ctrl+L forces
+  a complete repaint while retaining the current menu or password input.
 
 ### Running Console Application
 

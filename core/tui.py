@@ -12,6 +12,7 @@ from translations import t
 
 _ACTIVE = None
 _PAINT_CACHE = None
+_TERMINAL_MONITOR = None
 _HEADER = ('jrescue', '')
 _HEADER_PROVIDER = None
 _HEADER_CHECKED = 0
@@ -272,11 +273,14 @@ class Frame:
         """Paint only on the UI thread; a resize never accepts a hidden action."""
         global _PAINT_CACHE
         if window.getmaxyx() != (self.rows, self.cols):
-            _PAINT_CACHE = None
+            redraw_screen(window)
             return False
         encoding = getattr(window, 'encoding', 'utf-8') or 'utf-8'
         target = (self.rows, self.cols, str(encoding).lower())
         previous = None
+        if (_PAINT_CACHE is not None and _PAINT_CACHE[0] is window and
+                _PAINT_CACHE[1] != target):
+            redraw_screen(window)
         if (refresh and _PAINT_CACHE is not None and
                 _PAINT_CACHE[0] is window and _PAINT_CACHE[1] == target):
             previous = _PAINT_CACHE[2]
@@ -325,39 +329,63 @@ def new_frame(window, title, hint='', main=False):
 
 def run(callback, *args, **kwargs):
     """Reuse one curses session instead of resetting the terminal between screens."""
-    global _PAINT_CACHE
+    global _PAINT_CACHE, _TERMINAL_MONITOR
     if _ACTIVE is not None:
         _ACTIVE.timeout(-1)
         return callback(_ACTIVE, *args, **kwargs)
     configure_terminal()
     _PAINT_CACHE = None
+    def start(window):
+        global _TERMINAL_MONITOR
+        from terminal_size import serial_monitor
+        _TERMINAL_MONITOR = serial_monitor(redraw_screen)
+        redraw_screen(window)
+        return callback(window, *args, **kwargs)
     try:
-        return curses.wrapper(callback, *args, **kwargs)
+        return curses.wrapper(start)
     finally:
         _PAINT_CACHE = None
+        _TERMINAL_MONITOR = None
 
 
 def session(callback):
     """Keep terminal setup outside all network/download/write workers."""
     configure_terminal()
     def start(window):
-        global _ACTIVE, _PAINT_CACHE
+        global _ACTIVE, _PAINT_CACHE, _TERMINAL_MONITOR
+        from terminal_size import serial_monitor
         _PAINT_CACHE = None
         init_colors()
         window.keypad(True)
         _ACTIVE = window
+        _TERMINAL_MONITOR = serial_monitor(redraw_screen)
+        redraw_screen(window)
         try:
             return callback()
         finally:
             _ACTIVE = None
             _PAINT_CACHE = None
+            _TERMINAL_MONITOR = None
     return curses.wrapper(start)
 
 
-def key(window, timed=False):
+def redraw_screen(window):
+    """Discard both render caches when the emulator's screen contents are lost."""
+    global _PAINT_CACHE
+    _PAINT_CACHE = None
+    window.clearok(True)
+
+
+def key(window, timed=False, timeout_ms=None):
     """Read Unicode input and turn curses timeout exceptions into refresh ticks."""
     try:
-        return window.get_wch()
+        delay = timeout_ms if timeout_ms is not None else (1000 if timed else -1)
+        value = (_TERMINAL_MONITOR.read(window, timed, delay) if _TERMINAL_MONITOR is not None
+                 else window.get_wch())
+        if value in (curses.KEY_RESIZE, '\x0c', 12):
+            redraw_screen(window)
+            return curses.KEY_RESIZE
+        return value
     except curses.error:
         if timed:
             return None
@@ -429,7 +457,7 @@ def menu(window, title, options, title_fn=None, refresh_ms=2000, main=False, ini
         if not f.paint(window):
             continue
         window.timeout(refresh_ms if title_fn else 1000)
-        value = key(window, timed=True)
+        value = key(window, timed=True, timeout_ms=refresh_ms if title_fn else 1000)
         if value is None:
             if title_fn:
                 heading = title_fn()
@@ -472,7 +500,7 @@ def text_screen(window, title, lines, refresh_fn=None, refresh_ms=2000, allow_he
         if not f.paint(window):
             continue
         window.timeout(refresh_ms if refresh_fn else - 1)
-        value = key(window, timed=bool(refresh_fn))
+        value = key(window, timed=bool(refresh_fn), timeout_ms=refresh_ms if refresh_fn else -1)
         if value is None:
             if refresh_fn:
                 lines = refresh_fn()
@@ -1085,4 +1113,4 @@ def power_pending(window, title):
         center_content(f, content_width([title]))
         f.write(max(0, f.height // 2), title, 'accent')
         if f.paint(window):
-            key(window, timed=True)
+            key(window, timed=True, timeout_ms=500)

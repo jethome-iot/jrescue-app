@@ -379,8 +379,8 @@ def _run_operation(title, worker, cancel_event=None, message=''):
         stdscr.nodelay(True)
         frame = 0
         while not done.is_set():
-            pressed = stdscr.getch()
-            if cancel_event is not None and pressed == 27:
+            pressed = tui.key(stdscr, timed=True, timeout_ms=0)
+            if cancel_event is not None and pressed in (27, '\x1b'):
                 cancel_event.set()
             with lock:
                 percent, lines = state['percent'], state['lines']
